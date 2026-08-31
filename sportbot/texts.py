@@ -24,7 +24,8 @@ from config import (
 
 BTN_CREATE = "🏀 Создать игру"
 BTN_LIST = "📋 Список игр"
-BTN_MY = "👤 Мои игры"
+BTN_MY = "🗓 Мои игры"
+BTN_PROFILE = "👤 Профиль"
 BTN_HELP = "❓ Помощь"
 
 BTN_CANCEL = "⬅️ Отмена"
@@ -44,6 +45,9 @@ BTN_CANCEL_GAME = "🗑 Отменить игру"
 BTN_CANCEL_GAME_YES = "Да, отменить"
 BTN_CANCEL_GAME_NO = "Нет, оставить"
 BTN_CREATE_FIRST = "🏀 Создать игру"
+BTN_EDIT_CLASS = "✏️ Изменить класс"
+BTN_EDIT_NAME = "✏️ Изменить имя"
+BTN_PROFILE_BACK = "⬅️ Назад к профилю"
 
 
 # ==========================================================
@@ -76,8 +80,10 @@ HELP = (
     "человек. Игра появится в общем списке, и ты автоматически записан первым.\n\n"
     "📋 <b>Список игр</b> — все ближайшие игры. Под каждой кнопка «Записаться». "
     "Передумал — жмёшь «Отписаться».\n\n"
-    "👤 <b>Мои игры</b> — что ты организуешь и куда записан. "
+    "🗓 <b>Мои игры</b> — что ты организуешь и куда записан. "
     "Свою игру можно отменить.\n\n"
+    "👤 <b>Профиль</b> — твоё имя, класс и личная статистика. "
+    "Перешёл в другой класс или хочешь, чтобы тебя записывали иначе — меняешь прямо там.\n\n"
     "Когда народу набралось сколько нужно — всем придёт «Команда собрана».\n"
     "За час до начала пришлю напоминание ⏰\n\n"
     "<b>Команды:</b>\n"
@@ -129,7 +135,7 @@ GAME_IN_PAST = (
 )
 TOO_MANY_GAMES = (
     "У тебя уже {count} активных игр — это максимум.\n"
-    "Проведи или отмени одну из них в разделе «👤 Мои игры», и создавай новую."
+    "Проведи или отмени одну из них в разделе «🗓 Мои игры», и создавай новую."
 )
 
 CREATE_CANCELLED = "Ок, отменил. Ничего не создаю 👌"
@@ -172,6 +178,25 @@ CANCEL_GAME_DONE = "Игра отменена. Ребятам сообщил �
 CANCEL_GAME_NOT_YOURS = "Отменить игру может только её организатор"
 CANCEL_GAME_KEPT = "Ок, игра остаётся 👌"
 GAME_CANCELLED_FOR_PLAYERS = "❌ Игра отменена организатором.\n\n{game}"
+
+
+# ==========================================================
+#   ПРОФИЛЬ
+# ==========================================================
+
+PROFILE_ASK_GRADE = "В какой ты теперь параллели?"
+PROFILE_ASK_LETTER = "А буква какая?"
+PROFILE_CLASS_UPDATED = "Готово, теперь ты {grade}{letter} ✅"
+
+PROFILE_ASK_NAME = (
+    "Напиши, как тебя записать — это имя увидят ребята в карточках игр.\n"
+    f"До {CUSTOM_TEXT_MAX_LEN} символов."
+)
+PROFILE_BAD_NAME = (
+    f"Имя должно быть от 2 до {CUSTOM_TEXT_MAX_LEN} символов. Попробуй ещё раз:"
+)
+PROFILE_NAME_UPDATED = "Готово, теперь тебя зовут {name} ✅"
+PROFILE_EDIT_CANCELLED = "Ок, оставил как было 👌"
 
 
 # ==========================================================
@@ -290,4 +315,46 @@ def format_game_short(game) -> str:
         f"{html.escape(game['sport'])}, "
         f"{format_date_short(game['game_date'])} в {game['game_time']}, "
         f"{html.escape(game['place'].lower())}"
+    )
+
+
+def classes_word(count: int) -> str:
+    """Правильное слово после числа: «из 1 класса» / «из 4 классов»."""
+    if count % 10 == 1 and count % 100 != 11:
+        return "класса"
+    return "классов"
+
+
+def format_profile(user, stats) -> str:
+    """
+    Собирает экран профиля: данные человека плюс его личная статистика.
+    user  — строка из таблицы users
+    stats — то, что вернула database.get_profile_stats()
+    """
+    name = html.escape(user["first_name"] or "Без имени")
+    nick = f"@{html.escape(user['username'])}" if user["username"] else "не указан"
+
+    # created_at выглядит как '2026-08-18 00:11:15' — берём из него только дату
+    if user["created_at"]:
+        day = datetime.strptime(user["created_at"][:10], "%Y-%m-%d").date()
+        joined = f"{day.day} {MONTHS[day.month - 1]}"
+    else:
+        joined = "давно"
+
+    favourite = html.escape(stats["favourite"]) if stats["favourite"] else "пока не ясно"
+
+    met = stats["classes_met"]
+    met_text = f"с ребятами из {met} {classes_word(met)}" if met else "пока только один"
+
+    return (
+        "👤 <b>Твой профиль</b>\n\n"
+        f"Имя: <b>{name}</b>\n"
+        f"Класс: <b>{user['grade']}{user['letter']}</b>\n"
+        f"Ник: {nick}\n"
+        f"В {BOT_NAME} с {joined}\n\n"
+        "📊 <b>Твоя статистика</b>\n"
+        f"Организовал игр: {stats['created']}\n"
+        f"Участвовал в играх: {stats['joined']}\n"
+        f"Любимый спорт: {favourite}\n"
+        f"Играл {met_text}"
     )

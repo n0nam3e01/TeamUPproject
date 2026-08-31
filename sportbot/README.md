@@ -195,6 +195,7 @@ sportbot/
 │   ├── create_game.py  пошаговое создание игры
 │   ├── games_list.py   список игр, записаться/отписаться
 │   ├── my_games.py     мои игры, отмена игры
+│   ├── profile.py      профиль: смена класса и имени
 │   └── admin.py        /stats и /export
 ├── requirements.txt    список библиотек
 ├── .env.example        образец файла с секретами

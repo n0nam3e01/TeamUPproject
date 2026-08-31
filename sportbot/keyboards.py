@@ -43,7 +43,8 @@ def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=texts.BTN_CREATE), KeyboardButton(text=texts.BTN_LIST)],
-            [KeyboardButton(text=texts.BTN_MY), KeyboardButton(text=texts.BTN_HELP)],
+            [KeyboardButton(text=texts.BTN_MY), KeyboardButton(text=texts.BTN_PROFILE)],
+            [KeyboardButton(text=texts.BTN_HELP)],
         ],
         resize_keyboard=True,
     )
@@ -142,3 +143,36 @@ def create_first_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=texts.BTN_CREATE_FIRST, callback_data="createnew"),
     ]])
+
+
+# ==========================================================
+#   ПРОФИЛЬ
+# ==========================================================
+
+def profile_kb() -> InlineKeyboardMarkup:
+    """Две кнопки под карточкой профиля."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=texts.BTN_EDIT_CLASS, callback_data="editclass")],
+        [InlineKeyboardButton(text=texts.BTN_EDIT_NAME, callback_data="editname")],
+    ])
+
+
+def grades_inline_kb() -> InlineKeyboardMarkup:
+    """Параллели 7-11 кнопками прямо под сообщением."""
+    buttons = [
+        InlineKeyboardButton(text=str(grade), callback_data=f"setgrade:{grade}")
+        for grade in GRADES
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+
+def letters_inline_kb(grade: int) -> InlineKeyboardMarkup:
+    """
+    Буквы классов. Номер параллели тащим прямо в кнопке,
+    чтобы не запоминать его отдельно между нажатиями.
+    """
+    buttons = [
+        InlineKeyboardButton(text=letter, callback_data=f"setletter:{grade}:{letter}")
+        for letter in LETTERS
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])

@@ -438,3 +438,86 @@ async def export_signups():
             ORDER BY s.id
         """)
         return [dict(row) for row in await cursor.fetchall()]
+
+
+# ==========================================================
+#   ПРОФИЛЬ: ИЗМЕНЕНИЕ ДАННЫХ И ЛИЧНАЯ СТАТИСТИКА
+# ==========================================================
+
+async def update_user_class(user_id: int, grade: int, letter: str) -> None:
+    """Меняет класс человека — например, когда он перешёл из 9-го в 10-й."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET grade = ?, letter = ? WHERE user_id = ?",
+            (grade, letter, user_id),
+        )
+        await db.commit()
+
+
+async def update_user_name(user_id: int, first_name: str) -> None:
+    """Меняет имя, под которым человека видят в карточках игр."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET first_name = ? WHERE user_id = ?",
+            (first_name, user_id),
+        )
+        await db.commit()
+
+
+async def get_profile_stats(user_id: int) -> dict:
+    """
+    Личные цифры для экрана профиля: сколько игр создал, в скольких участвовал,
+    какой спорт любимый и с ребятами из скольких классов уже играл.
+    Отменённые игры нигде не считаются.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Сколько игр организовал
+        cursor = await db.execute("""
+            SELECT COUNT(*) AS c FROM games
+            WHERE creator_id = ? AND status != 'cancelled'
+        """, (user_id,))
+        created = (await cursor.fetchone())["c"]
+
+        # В скольких играх участвовал (включая свои)
+        cursor = await db.execute("""
+            SELECT COUNT(*) AS c
+            FROM signups s
+            JOIN games g ON g.game_id = s.game_id
+            WHERE s.user_id = ? AND g.status != 'cancelled'
+        """, (user_id,))
+        joined = (await cursor.fetchone())["c"]
+
+        # Любимый вид спорта — тот, в который записывался чаще всего
+        cursor = await db.execute("""
+            SELECT g.sport, COUNT(*) AS c
+            FROM signups s
+            JOIN games g ON g.game_id = s.game_id
+            WHERE s.user_id = ? AND g.status != 'cancelled'
+            GROUP BY g.sport
+            ORDER BY c DESC
+            LIMIT 1
+        """, (user_id,))
+        row = await cursor.fetchone()
+        favourite = row["sport"] if row else None
+
+        # Из скольких разных классов были ребята, с которыми он играл.
+        # mine — его записи, others — записи остальных на те же игры.
+        cursor = await db.execute("""
+            SELECT DISTINCT u.grade, u.letter
+            FROM signups mine
+            JOIN signups others
+                 ON others.game_id = mine.game_id AND others.user_id != mine.user_id
+            JOIN games g ON g.game_id = mine.game_id
+            JOIN users u ON u.user_id = others.user_id
+            WHERE mine.user_id = ? AND g.status != 'cancelled'
+        """, (user_id,))
+        classes = {f"{r['grade']}{r['letter']}" for r in await cursor.fetchall()}
+
+    return {
+        "created": created,
+        "joined": joined,
+        "favourite": favourite,
+        "classes_met": len(classes),
+    }
