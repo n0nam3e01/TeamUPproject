@@ -45,6 +45,7 @@ BTN_CANCEL_GAME = "🗑 Отменить игру"
 BTN_CANCEL_GAME_YES = "Да, отменить"
 BTN_CANCEL_GAME_NO = "Нет, оставить"
 BTN_CREATE_FIRST = "🏀 Создать игру"
+BTN_SHARE = "🔗 Позвать ребят"
 BTN_EDIT_CLASS = "✏️ Изменить класс"
 BTN_EDIT_NAME = "✏️ Изменить имя"
 BTN_PROFILE_BACK = "⬅️ Назад к профилю"
@@ -159,6 +160,21 @@ SIGNED_OUT = "Отписал. Ничего страшного 👌"
 ALREADY_SIGNED = "Ты уже записан на эту игру"
 NOT_SIGNED = "Ты и так не записан"
 GAME_NOT_ACTUAL = "Эта игра уже неактуальна"
+SHARE_HINT = (
+    "Перешли это сообщение в чат класса — кто нажмёт на ссылку, сразу попадёт на игру 👇"
+)
+SHARE_MESSAGE = (
+    "{emoji} <b>{sport}</b> — {when}\n"
+    "📍 {place}\n"
+    "{need}\n\n"
+    "👉 {link}"
+)
+SHARE_NEED_MORE = "Нужно ещё {count} {word} — залетай!"
+SHARE_ENOUGH = "Команда уже собрана, но лишним никто не будет 😄"
+DEEP_LINK_NOT_FOUND = "Такой игры больше нет — возможно, её отменили."
+DEEP_LINK_NEED_START = (
+    "Сначала познакомимся, а потом сразу покажу игру 👇"
+)
 GAME_INACTIVE_CARD = "\n\n<i>Игра уже неактуальна</i>"
 CREATOR_CANT_LEAVE = "Ты организатор — отписаться нельзя. Можно отменить игру."
 
@@ -285,7 +301,19 @@ def players_word(count: int) -> str:
     return "игрока" if count == 1 else "игроков"
 
 
-def format_game_card(game) -> str:
+def format_players_list(players) -> str:
+    """Имена и классы записавшихся, одной строкой через запятую."""
+    names = []
+    for player in players:
+        name = html.escape(player["first_name"] or "Кто-то")
+        if player["grade"]:
+            names.append(f"{name} ({player['grade']}{player['letter']})")
+        else:
+            names.append(name)
+    return ", ".join(names)
+
+
+def format_game_card(game, players=None) -> str:
     """
     Собирает карточку игры — то, что видно в списке.
     game — строка из базы (словарь с полями игры + players_count + данные организатора).
@@ -304,12 +332,18 @@ def format_game_card(game) -> str:
     count = game["players_count"]
     ready = " ✅" if count >= game["min_players"] else ""
 
+    # Номер игры — по нему удобно ссылаться: «пойдём на 12-ю»
+    number = f" · #{game['game_id']}" if game.get("game_id") else ""
+
+    # Состав показываем только там, где он передан
+    roster = "\n   " + format_players_list(players) if players else ""
+
     return (
-        f"{emoji} <b>{html.escape(sport)}</b>\n"
+        f"{emoji} <b>{html.escape(sport)}</b>{number}\n"
         f"📅 {format_date_full(game['game_date'])}\n"
         f"🕒 {game['game_time']}\n"
         f"📍 {html.escape(game['place'])}\n"
-        f"👥 Записались: {count} из {game['min_players']}{ready}\n"
+        f"👥 Записались: {count} из {game['min_players']}{ready}{roster}\n"
         f"🙋 Организатор: {html.escape(creator)}"
     )
 
@@ -363,3 +397,8 @@ def format_profile(user, stats) -> str:
         f"Любимый спорт: {favourite}\n"
         f"Играл {met_text}"
     )
+
+
+def sport_emoji(sport: str) -> str:
+    """Значок вида спорта. Если его нет в config.py — общий 🏅"""
+    return SPORT_EMOJI.get(sport, DEFAULT_SPORT_EMOJI)

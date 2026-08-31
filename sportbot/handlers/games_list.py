@@ -7,6 +7,7 @@
   show_dead_card   — пометить карточку как неактуальную
 """
 
+import html
 import logging
 
 from aiogram import Bot, F, Router
@@ -63,10 +64,11 @@ async def refresh_card(callback: CallbackQuery, game_id: int, user_id: int) -> N
 
     signed_up = await db.is_signed_up(game_id, user_id)
     is_creator = game["creator_id"] == user_id
+    players = await db.get_players_full(game_id)
 
     await edit_card(
         callback,
-        texts.format_game_card(game),
+        texts.format_game_card(game, players),
         kb.game_card_kb(game_id, signed_up, is_creator),
     )
 
@@ -83,9 +85,10 @@ async def send_game_card(message: Message, game, user_id: int) -> None:
     """Отправляет карточку игры отдельным сообщением с нужной кнопкой."""
     signed_up = await db.is_signed_up(game["game_id"], user_id)
     is_creator = game["creator_id"] == user_id
+    players = await db.get_players_full(game["game_id"])
 
     await message.answer(
-        texts.format_game_card(game),
+        texts.format_game_card(game, players),
         reply_markup=kb.game_card_kb(game["game_id"], signed_up, is_creator),
     )
 
@@ -220,3 +223,45 @@ async def check_team_broken(bot: Bot, game_id: int) -> None:
         word=texts.players_word(missing),
     )
     await safe_send(bot, game["creator_id"], text)
+
+
+# ==========================================================
+#   ПОЗВАТЬ РЕБЯТ — ссылка прямо на игру
+# ==========================================================
+
+@router.callback_query(F.data.startswith("share:"))
+async def share_game(callback: CallbackQuery, bot: Bot) -> None:
+    """
+    Готовит сообщение со ссылкой на игру. Его достаточно переслать в чат класса:
+    кто нажмёт на ссылку — попадёт прямо на эту игру и сможет записаться.
+    """
+    game_id = int(callback.data.split(":")[1])
+    game = await db.get_game(game_id)
+
+    if not is_game_active(game):
+        await callback.answer(texts.GAME_NOT_ACTUAL, show_alert=True)
+        await show_dead_card(callback, game)
+        return
+
+    # bot.me() аиограм кэширует, так что лишних запросов в Telegram не будет
+    me = await bot.me()
+    link = f"https://t.me/{me.username}?start=game_{game_id}"
+
+    missing = game["min_players"] - game["players_count"]
+    if missing > 0:
+        need = texts.SHARE_NEED_MORE.format(count=missing,
+                                            word=texts.players_word(missing))
+    else:
+        need = texts.SHARE_ENOUGH
+
+    await callback.answer()
+    await callback.message.answer(texts.SHARE_HINT)
+    await callback.message.answer(texts.SHARE_MESSAGE.format(
+        emoji=texts.sport_emoji(game["sport"]),
+        sport=html.escape(game["sport"]),
+        when=f"{texts.format_date_short(game['game_date'])} в {game['game_time']}",
+        place=html.escape(game["place"]),
+        need=need,
+        link=link,
+    ))
+    logger.info("Пользователь %s поделился игрой #%s", callback.from_user.id, game_id)

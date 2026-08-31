@@ -125,7 +125,10 @@ def game_card_kb(game_id: int, signed_up: bool,
             text=texts.BTN_SIGNUP, callback_data=f"signup:{game_id}"
         )
 
-    return InlineKeyboardMarkup(inline_keyboard=[[button]])
+    # Вторая кнопка одна для всех: позвать ребят ссылкой
+    share = InlineKeyboardButton(text=texts.BTN_SHARE,
+                                 callback_data=f"share:{game_id}")
+    return InlineKeyboardMarkup(inline_keyboard=[[button], [share]])
 
 
 def cancel_game_confirm_kb(game_id: int) -> InlineKeyboardMarkup:

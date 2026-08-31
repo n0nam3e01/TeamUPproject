@@ -521,3 +521,20 @@ async def get_profile_stats(user_id: int) -> dict:
         "favourite": favourite,
         "classes_met": len(classes),
     }
+
+
+async def get_players_full(game_id: int):
+    """
+    Кто записан на игру — с именами и классами, в порядке записи.
+    Нужно, чтобы показывать состав прямо в карточке игры.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("""
+            SELECT u.user_id, u.first_name, u.grade, u.letter
+            FROM signups s
+            LEFT JOIN users u ON u.user_id = s.user_id
+            WHERE s.game_id = ?
+            ORDER BY s.id
+        """, (game_id,))
+        return [dict(row) for row in await cursor.fetchall()]

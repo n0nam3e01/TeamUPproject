@@ -9,7 +9,7 @@ import html
 import logging
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
@@ -17,6 +17,7 @@ from aiogram.types import Message
 import database as db
 import keyboards as kb
 import texts
+from handlers import games_list
 from config import GRADES, clean_letter
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,47 @@ class Register(StatesGroup):
     """Два шага знакомства: сначала параллель, потом буква класса."""
     grade = State()
     letter = State()
+
+
+# ==========================================================
+#   ПЕРЕХОД ПО ССЫЛКЕ НА КОНКРЕТНУЮ ИГРУ
+# ==========================================================
+
+@router.message(CommandStart(deep_link=True))
+async def start_with_game(message: Message, command: CommandObject,
+                          state: FSMContext) -> None:
+    """
+    Сюда попадают те, кто пришёл по ссылке вида t.me/бот?start=game_12.
+    Показываем сразу нужную игру, чтобы человек мог записаться в один клик.
+    """
+    await state.clear()
+
+    # Из ссылки приходит строка вида "game_12" — вытаскиваем номер
+    argument = (command.args or "")
+    if not argument.startswith("game_") or not argument[5:].isdigit():
+        await cmd_start(message, state)
+        return
+
+    game_id = int(argument[5:])
+    user = await db.get_user(message.from_user.id)
+
+    # Незнакомого сначала регистрируем, игру он найдёт в списке
+    if user is None:
+        await message.answer(texts.WELCOME)
+        await message.answer(texts.DEEP_LINK_NEED_START)
+        await message.answer(texts.ASK_GRADE, reply_markup=kb.grades_kb())
+        await state.set_state(Register.grade)
+        return
+
+    game = await db.get_game(game_id)
+    if not games_list.is_game_active(game):
+        await message.answer(texts.DEEP_LINK_NOT_FOUND, reply_markup=kb.main_menu())
+        return
+
+    await message.answer(texts.LIST_HEADER, reply_markup=kb.main_menu())
+    await games_list.send_game_card(message, game, message.from_user.id)
+    logger.info("Пользователь %s пришёл по ссылке на игру #%s",
+                message.from_user.id, game_id)
 
 
 # ==========================================================
