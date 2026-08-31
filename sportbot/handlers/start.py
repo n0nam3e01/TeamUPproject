@@ -21,6 +21,15 @@ from handlers import games_list
 from config import GRADES, clean_letter
 
 logger = logging.getLogger(__name__)
+# Два роутера, и это важно.
+#
+# commands_router подключается ПЕРВЫМ во всём боте: команды вроде /start
+# должны работать всегда, даже посреди создания игры. Иначе шаг диалога
+# перехватит команду и ответит «выбери вид спорта кнопкой».
+#
+# router подключается ПОСЛЕДНИМ: в нём регистрация и «ловушка» для
+# непонятных сообщений, которая обязана проверяться после всего остального.
+commands_router = Router(name="commands")
 router = Router(name="start")
 
 
@@ -34,7 +43,7 @@ class Register(StatesGroup):
 #   ПЕРЕХОД ПО ССЫЛКЕ НА КОНКРЕТНУЮ ИГРУ
 # ==========================================================
 
-@router.message(CommandStart(deep_link=True))
+@commands_router.message(CommandStart(deep_link=True))
 async def start_with_game(message: Message, command: CommandObject,
                           state: FSMContext) -> None:
     """
@@ -75,7 +84,7 @@ async def start_with_game(message: Message, command: CommandObject,
 #   /start
 # ==========================================================
 
-@router.message(CommandStart())
+@commands_router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     """Знакомимся, если человек новый. Если уже знакомы — просто показываем меню."""
     await state.clear()
@@ -149,7 +158,7 @@ async def register_letter(message: Message, state: FSMContext) -> None:
 #   ПОМОЩЬ
 # ==========================================================
 
-@router.message(Command("help"))
+@commands_router.message(Command("help"))
 @router.message(F.text == texts.BTN_HELP)
 async def show_help(message: Message, state: FSMContext) -> None:
     await state.clear()
