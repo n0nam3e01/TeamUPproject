@@ -30,9 +30,22 @@ logger = logging.getLogger(__name__)
 router = Router(name="admin")
 
 
-def is_admin(message: Message) -> bool:
-    """Проверяем, что команду прислал организатор проекта."""
-    return message.from_user.id == ADMIN_ID and ADMIN_ID != 0
+def is_owner(user_id: int) -> bool:
+    """
+    Главный организатор — тот, чей id записан в .env.
+    Его нельзя снять, забанить или предупредить: иначе бот останется без хозяина.
+    """
+    return ADMIN_ID != 0 and user_id == ADMIN_ID
+
+
+async def is_admin(user_id: int) -> bool:
+    """
+    Права организатора есть у главного и у тех, кому он их выдал
+    командой /makeadmin.
+    """
+    if is_owner(user_id):
+        return True
+    return await db.is_admin_user(user_id)
 
 
 def rows_to_csv(headers: list[str], rows: list[list]) -> bytes:
@@ -54,7 +67,7 @@ def rows_to_csv(headers: list[str], rows: list[list]) -> bytes:
 
 @router.message(Command("stats"))
 async def cmd_stats(message: Message) -> None:
-    if not is_admin(message):
+    if not await is_admin(message.from_user.id):
         await message.answer(texts.NOT_ADMIN)
         return
 
@@ -95,7 +108,7 @@ async def cmd_stats(message: Message) -> None:
 
 @router.message(Command("export"))
 async def cmd_export(message: Message) -> None:
-    if not is_admin(message):
+    if not await is_admin(message.from_user.id):
         await message.answer(texts.NOT_ADMIN)
         return
 
@@ -213,10 +226,11 @@ async def resolve_game(message: Message, query: str, example: str):
 
 @router.message(Command("admin"))
 async def cmd_admin(message: Message) -> None:
-    if not is_admin(message):
+    if not await is_admin(message.from_user.id):
         await message.answer(texts.NOT_ADMIN)
         return
-    await message.answer(texts.ADMIN_HELP)
+    owner_block = texts.OWNER_HELP_BLOCK if is_owner(message.from_user.id) else ""
+    await message.answer(texts.ADMIN_HELP.format(owner_block=owner_block))
 
 
 # ==========================================================
@@ -225,7 +239,7 @@ async def cmd_admin(message: Message) -> None:
 
 @router.message(Command("games"))
 async def cmd_games(message: Message) -> None:
-    if not is_admin(message):
+    if not await is_admin(message.from_user.id):
         await message.answer(texts.NOT_ADMIN)
         return
 
@@ -253,7 +267,7 @@ async def cmd_games(message: Message) -> None:
 
 @router.message(Command("who"))
 async def cmd_who(message: Message, command: CommandObject) -> None:
-    if not is_admin(message):
+    if not await is_admin(message.from_user.id):
         await message.answer(texts.NOT_ADMIN)
         return
 
@@ -291,7 +305,7 @@ async def cmd_who(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("delete_game"))
 async def cmd_delete_game(message: Message, command: CommandObject) -> None:
-    if not is_admin(message):
+    if not await is_admin(message.from_user.id):
         await message.answer(texts.NOT_ADMIN)
         return
 
@@ -318,7 +332,7 @@ async def cmd_delete_game(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("users"))
 async def cmd_users(message: Message) -> None:
-    if not is_admin(message):
+    if not await is_admin(message.from_user.id):
         await message.answer(texts.NOT_ADMIN)
         return
 
@@ -343,8 +357,16 @@ async def cmd_users(message: Message) -> None:
         active_ban = ban and ban > now().strftime("%Y-%m-%d %H:%M:%S")
         blocked = f" 🚫{texts.format_ban_until(ban)}" if active_ban else ""
 
+        # Кто из них помощник, а кто главный
+        if is_owner(user["user_id"]):
+            role = " 👑"
+        elif user["is_admin"]:
+            role = " 🛡"
+        else:
+            role = ""
+
         lines.append(
-            f"  • {user_label(user)} — игр: {user['games_count']}, "
+            f"  • {user_label(user)}{role} — игр: {user['games_count']}, "
             f"{texts.format_last_played(user['last_played'])}{warns}{blocked}"
         )
 
@@ -357,7 +379,7 @@ async def cmd_users(message: Message) -> None:
 
 @router.message(Command("warn"))
 async def cmd_warn(message: Message, command: CommandObject) -> None:
-    if not is_admin(message):
+    if not await is_admin(message.from_user.id):
         await message.answer(texts.NOT_ADMIN)
         return
 
@@ -371,6 +393,10 @@ async def cmd_warn(message: Message, command: CommandObject) -> None:
     if len(parts) < 2 or not parts[1].strip():
         nick = user["username"] or user["user_id"]
         await message.answer(texts.ADMIN_NEED_REASON.format(nick=nick))
+        return
+
+    if is_owner(user["user_id"]):
+        await message.answer(texts.CANNOT_TOUCH_OWNER)
         return
 
     reason = parts[1].strip()
@@ -402,7 +428,7 @@ async def cmd_warn(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("warns"))
 async def cmd_warns(message: Message, command: CommandObject) -> None:
-    if not is_admin(message):
+    if not await is_admin(message.from_user.id):
         await message.answer(texts.NOT_ADMIN)
         return
 
@@ -432,7 +458,7 @@ async def cmd_warns(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("clearwarns"))
 async def cmd_clearwarns(message: Message, command: CommandObject) -> None:
-    if not is_admin(message):
+    if not await is_admin(message.from_user.id):
         await message.answer(texts.NOT_ADMIN)
         return
 
@@ -459,7 +485,7 @@ async def cmd_clearwarns(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("ban"))
 async def cmd_ban(message: Message, command: CommandObject) -> None:
-    if not is_admin(message):
+    if not await is_admin(message.from_user.id):
         await message.answer(texts.NOT_ADMIN)
         return
 
@@ -471,6 +497,10 @@ async def cmd_ban(message: Message, command: CommandObject) -> None:
 
     user = await resolve_user(message, parts[0], "/ban @alinur 7 причина")
     if user is None:
+        return
+
+    if is_owner(user["user_id"]):
+        await message.answer(texts.CANNOT_TOUCH_OWNER)
         return
 
     if not parts[1].isdigit() or not 1 <= int(parts[1]) <= MAX_BAN_DAYS:
@@ -494,7 +524,7 @@ async def cmd_ban(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("unban"))
 async def cmd_unban(message: Message, command: CommandObject) -> None:
-    if not is_admin(message):
+    if not await is_admin(message.from_user.id):
         await message.answer(texts.NOT_ADMIN)
         return
 
@@ -510,3 +540,94 @@ async def cmd_unban(message: Message, command: CommandObject) -> None:
     await safe_send(message.bot, user["user_id"], texts.UNBAN_FOR_USER)
     logger.info("Организатор снял запрет с пользователя %s", user["user_id"])
     await message.answer(texts.UNBAN_DONE.format(name=name))
+
+
+# ==========================================================
+#   ПОМОЩНИКИ — только для главного организатора
+# ==========================================================
+
+async def owner_only(message: Message) -> bool:
+    """Пускает дальше только главного. Иначе сам всё объясняет."""
+    if is_owner(message.from_user.id):
+        return True
+    await message.answer(texts.NOT_OWNER)
+    return False
+
+
+@router.message(Command("admins"))
+async def cmd_admins(message: Message) -> None:
+    if not await owner_only(message):
+        return
+
+    lines = []
+
+    # Сам главный — первой строкой, чтобы было видно, что он есть
+    owner = await db.get_user(ADMIN_ID)
+    if owner:
+        lines.append(texts.ADMINS_OWNER_LINE.format(label=user_label(owner)))
+    else:
+        lines.append(f"👑 id {ADMIN_ID} — главный, снять нельзя")
+
+    admins = await db.get_admins()
+    lines.insert(0, texts.ADMINS_HEADER.format(count=len(admins)))
+    lines.insert(1, "")
+
+    if admins:
+        for admin_user in admins:
+            lines.append(f"🛡 {user_label(admin_user)}")
+    else:
+        lines.append("")
+        lines.append(texts.ADMINS_EMPTY)
+
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("makeadmin"))
+async def cmd_makeadmin(message: Message, command: CommandObject) -> None:
+    if not await owner_only(message):
+        return
+
+    user = await resolve_user(message, (command.args or "").strip(),
+                              "/makeadmin @alinur")
+    if user is None:
+        return
+
+    name = html.escape(user["first_name"] or "Он")
+
+    if is_owner(user["user_id"]):
+        await message.answer(texts.MAKEADMIN_ALREADY.format(name=name))
+        return
+
+    if not await db.set_admin(user["user_id"], True):
+        await message.answer(texts.MAKEADMIN_ALREADY.format(name=name))
+        return
+
+    await safe_send(message.bot, user["user_id"], texts.MAKEADMIN_FOR_USER)
+    logger.info("Главный выдал права помощника пользователю %s", user["user_id"])
+    await message.answer(texts.MAKEADMIN_DONE.format(name=name))
+
+
+@router.message(Command("removeadmin"))
+async def cmd_removeadmin(message: Message, command: CommandObject) -> None:
+    if not await owner_only(message):
+        return
+
+    user = await resolve_user(message, (command.args or "").strip(),
+                              "/removeadmin @alinur")
+    if user is None:
+        return
+
+    # Главного снять нельзя — ни другим, ни самому себе
+    if is_owner(user["user_id"]):
+        await message.answer(texts.CANNOT_REMOVE_OWNER)
+        return
+
+    name = html.escape(user["first_name"] or "Он")
+
+    if not await db.set_admin(user["user_id"], False):
+        await message.answer(texts.REMOVEADMIN_NOT_ADMIN.format(name=name))
+        return
+
+    await safe_send(message.bot, user["user_id"], texts.REMOVEADMIN_FOR_USER)
+    logger.info("Главный снял права помощника с пользователя %s", user["user_id"])
+    await message.answer(texts.REMOVEADMIN_DONE.format(name=name))

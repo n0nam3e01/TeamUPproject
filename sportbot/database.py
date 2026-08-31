@@ -57,6 +57,7 @@ async def init_db() -> None:
                 grade      INTEGER,
                 letter       TEXT,
                 banned_until TEXT,
+                is_admin     INTEGER NOT NULL DEFAULT 0,
                 created_at   TEXT
             )
         """)
@@ -117,6 +118,7 @@ async def _add_missing_columns(db) -> None:
         },
         "users": {
             "banned_until": "TEXT",
+            "is_admin": "INTEGER NOT NULL DEFAULT 0",
         },
     }
 
@@ -833,6 +835,7 @@ async def get_users_overview():
                 u.grade,
                 u.letter,
                 u.banned_until,
+                u.is_admin,
                 (SELECT COUNT(*) FROM signups s
                  JOIN games g ON g.game_id = s.game_id
                  WHERE s.user_id = u.user_id
@@ -911,3 +914,40 @@ async def clear_warnings(user_id: int) -> int:
             "DELETE FROM warnings WHERE user_id = ?", (user_id,))
         await db.commit()
         return cursor.rowcount
+
+
+# ==========================================================
+#   ПОМОЩНИКИ ОРГАНИЗАТОРА (АДМИНЫ)
+# ==========================================================
+
+async def set_admin(user_id: int, value: bool) -> bool:
+    """
+    Даёт или забирает права помощника.
+    True — что-то изменилось, False — права и так были такими.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE users SET is_admin = ? WHERE user_id = ? AND is_admin != ?",
+            (1 if value else 0, user_id, 1 if value else 0))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def is_admin_user(user_id: int) -> bool:
+    """Есть ли у человека права помощника (главного админа проверяют отдельно)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT is_admin FROM users WHERE user_id = ?", (user_id,))
+        row = await cursor.fetchone()
+        return bool(row and row[0])
+
+
+async def get_admins():
+    """Все, кому выданы права помощника."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("""
+            SELECT * FROM users WHERE is_admin = 1
+            ORDER BY grade, letter, first_name
+        """)
+        return [dict(row) for row in await cursor.fetchall()]

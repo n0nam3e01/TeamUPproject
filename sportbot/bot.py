@@ -52,7 +52,7 @@ async def setup_commands(bot: Bot) -> None:
     ]
     await bot.set_my_commands(common, scope=BotCommandScopeDefault())
 
-    # Команды организатора видны только в твоём личном чате с ботом
+    # Команды организатора видны только в личных чатах админов
     if ADMIN_ID:
         admin_only = common + [
             BotCommand(command="admin", description="Команды организатора"),
@@ -68,7 +68,16 @@ async def setup_commands(bot: Bot) -> None:
             BotCommand(command="ban", description="Закрыть создание игр"),
             BotCommand(command="unban", description="Снять запрет"),
         ]
-        await bot.set_my_commands(admin_only, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
+        # Главный плюс все, кому он выдал права
+        admin_ids = [ADMIN_ID] + [user["user_id"] for user in await db.get_admins()]
+
+        for admin_id in set(admin_ids):
+            try:
+                await bot.set_my_commands(
+                    admin_only, scope=BotCommandScopeChat(chat_id=admin_id))
+            except Exception as error:
+                # Человек мог не начинать чат с ботом — это не повод падать
+                logger.warning("Не смог обновить меню для %s: %s", admin_id, error)
 
 
 async def main() -> None:
