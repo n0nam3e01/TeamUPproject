@@ -56,8 +56,8 @@ def grades_kb() -> ReplyKeyboardMarkup:
 
 
 def letters_kb() -> ReplyKeyboardMarkup:
-    """Кнопки с буквами классов: А Б В Г Д"""
-    return _reply_kb(LETTERS, per_row=5)
+    """Буквы классов плюс «Другое» — на случай, если нужной буквы нет."""
+    return _reply_kb(LETTERS + [texts.BTN_OTHER], per_row=5)
 
 
 # ==========================================================
@@ -175,4 +175,7 @@ def letters_inline_kb(grade: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=letter, callback_data=f"setletter:{grade}:{letter}")
         for letter in LETTERS
     ]
-    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+    # Отдельной строкой — возможность написать свою букву
+    other = [InlineKeyboardButton(text=texts.BTN_OTHER,
+                                  callback_data=f"letterother:{grade}")]
+    return InlineKeyboardMarkup(inline_keyboard=[buttons, other])

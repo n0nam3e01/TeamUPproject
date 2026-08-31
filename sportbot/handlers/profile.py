@@ -18,7 +18,7 @@ from aiogram.types import CallbackQuery, Message
 import database as db
 import keyboards as kb
 import texts
-from config import CUSTOM_TEXT_MAX_LEN, GRADES, LETTERS
+from config import CUSTOM_TEXT_MAX_LEN, GRADES, LETTERS, clean_letter
 
 logger = logging.getLogger(__name__)
 router = Router(name="profile")
@@ -28,8 +28,9 @@ MIN_NAME_LEN = 2
 
 
 class EditProfile(StatesGroup):
-    """Единственный шаг, где нужен ввод текстом — новое имя."""
+    """Два шага, где нужен ввод текстом: новое имя и своя буква класса."""
     name = State()
+    letter = State()
 
 
 # ==========================================================
@@ -123,6 +124,55 @@ async def save_new_class(callback: CallbackQuery) -> None:
         texts.PROFILE_CLASS_UPDATED.format(grade=grade, letter=letter)
     )
     await refresh_profile(callback)
+
+
+# ==========================================================
+#   СВОЯ БУКВА КЛАССА — если нужной нет на кнопках
+# ==========================================================
+
+@router.callback_query(F.data.startswith("letterother:"))
+async def ask_custom_letter(callback: CallbackQuery, state: FSMContext) -> None:
+    """Запоминаем выбранную параллель и ждём букву текстом."""
+    grade = int(callback.data.split(":")[1])
+
+    await state.update_data(grade=grade)
+    await state.set_state(EditProfile.letter)
+
+    await callback.answer()
+    await callback.message.answer(texts.PROFILE_ASK_CUSTOM_LETTER,
+                                  reply_markup=kb.only_cancel_kb())
+
+
+@router.message(EditProfile.letter, F.text == texts.BTN_CANCEL)
+async def cancel_letter_edit(message: Message, state: FSMContext) -> None:
+    """Отмена проверяется раньше, чем сама буква."""
+    await state.clear()
+    await message.answer(texts.PROFILE_EDIT_CANCELLED, reply_markup=kb.main_menu())
+    await send_profile(message, message.from_user.id)
+
+
+@router.message(EditProfile.letter)
+async def save_custom_letter(message: Message, state: FSMContext) -> None:
+    """Принимаем ровно один символ и сохраняем класс целиком."""
+    letter = clean_letter(message.text or "")
+
+    if letter is None:
+        await message.answer(texts.BAD_CUSTOM_LETTER, reply_markup=kb.only_cancel_kb())
+        return
+
+    data = await state.get_data()
+    grade = data["grade"]
+
+    await db.update_user_class(message.from_user.id, grade, letter)
+    await state.clear()
+    logger.info("Пользователь %s сменил класс на %s%s (буква своя)",
+                message.from_user.id, grade, letter)
+
+    await message.answer(
+        texts.PROFILE_CLASS_UPDATED.format(grade=grade, letter=letter),
+        reply_markup=kb.main_menu(),
+    )
+    await send_profile(message, message.from_user.id)
 
 
 # ==========================================================

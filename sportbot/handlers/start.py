@@ -17,7 +17,7 @@ from aiogram.types import Message
 import database as db
 import keyboards as kb
 import texts
-from config import GRADES, LETTERS
+from config import GRADES, clean_letter
 
 logger = logging.getLogger(__name__)
 router = Router(name="start")
@@ -64,10 +64,19 @@ async def register_grade(message: Message, state: FSMContext) -> None:
 
 @router.message(Register.letter)
 async def register_letter(message: Message, state: FSMContext) -> None:
-    """Ждём букву класса, сохраняем человека в базу и показываем меню."""
-    text = (message.text or "").strip().upper()
+    """
+    Ждём букву класса. Можно нажать кнопку, а можно написать свою букву —
+    вдруг в школе есть класс «Е» или «Ж», которых нет на кнопках.
+    """
+    text = (message.text or "").strip()
 
-    if text not in LETTERS:
+    # Нажали «Другое» — подсказываем и остаёмся ждать букву в этом же шаге
+    if text == texts.BTN_OTHER:
+        await message.answer(texts.ASK_CUSTOM_LETTER)
+        return
+
+    letter = clean_letter(text)
+    if letter is None:
         await message.answer(texts.BAD_LETTER, reply_markup=kb.letters_kb())
         return
 
@@ -82,14 +91,14 @@ async def register_letter(message: Message, state: FSMContext) -> None:
         username=message.from_user.username or "",
         first_name=first_name,
         grade=grade,
-        letter=text,
+        letter=letter,
     )
     await state.clear()
 
-    logger.info("Новый пользователь: %s (%s%s)", first_name, grade, text)
+    logger.info("Новый пользователь: %s (%s%s)", first_name, grade, letter)
 
     await message.answer(
-        texts.REG_DONE.format(name=html.escape(first_name), grade=grade, letter=text),
+        texts.REG_DONE.format(name=html.escape(first_name), grade=grade, letter=letter),
         reply_markup=kb.main_menu(),
     )
 
