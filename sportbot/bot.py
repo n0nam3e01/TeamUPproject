@@ -61,6 +61,7 @@ async def setup_commands(bot: Bot) -> None:
             BotCommand(command="games", description="Все игры с номерами"),
             BotCommand(command="who", description="Кто записан на игру"),
             BotCommand(command="delete_game", description="Убрать игру"),
+            BotCommand(command="reviews", description="Отзывы об играх"),
             BotCommand(command="users", description="Список учеников"),
             BotCommand(command="warn", description="Выдать предупреждение"),
             BotCommand(command="warns", description="История предупреждений"),

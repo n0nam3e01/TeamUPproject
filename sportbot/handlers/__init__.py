@@ -6,13 +6,22 @@ start должен быть последним, потому что в нём л
 для непонятных сообщений — иначе она перехватила бы всё остальное.
 """
 
-from handlers import admin, create_game, games_list, my_games, profile, start
+from handlers import (
+    admin,
+    create_game,
+    games_list,
+    my_games,
+    profile,
+    reviews,
+    start,
+)
 
 routers = [
     create_game.router,
     games_list.router,
     my_games.router,
     profile.router,
+    reviews.router,
     admin.router,
     start.router,
 ]

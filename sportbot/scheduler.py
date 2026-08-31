@@ -2,7 +2,8 @@
 Фоновые задачи бота — работают сами, без участия пользователя.
 
   Каждые 5 минут — проверяем, каким играм пора отправить напоминание за час.
-  Каждый час    — прошедшие игры переводим в статус 'done'.
+  Каждый час    — прошедшие игры закрываем и просим участников
+                  оценить, как всё прошло.
 
 Здесь же лежат две функции безопасной отправки сообщений (safe_send и
 notify_players). Они нужны и напоминаниям, и хендлерам: если человек
@@ -15,6 +16,7 @@ from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import database as db
+import keyboards as kb
 import texts
 from config import (
     REMINDER_MAX_MINUTES,
@@ -100,11 +102,39 @@ async def check_reminders(bot: Bot) -> None:
 #   ЗАДАЧА 2: ЗАКРЫТИЕ ПРОШЕДШИХ ИГР
 # ==========================================================
 
-async def close_past_games() -> None:
-    """Игры, время которых уже прошло, переводим в статус 'done'."""
+async def close_past_games(bot: Bot) -> None:
+    """
+    Игры, время которых уже прошло, переводим в статус 'done'
+    и сразу спрашиваем у участников, как всё прошло.
+    """
     closed = await db.finish_past_games()
     if closed:
         logger.info("Закрыто прошедших игр: %s", closed)
+
+    await ask_for_reviews(bot)
+
+
+async def ask_for_reviews(bot: Bot) -> None:
+    """
+    Просит участников оценить недавно прошедшую игру.
+    Флаг review_asked не даёт спросить дважды, а про старые игры
+    не спрашиваем вовсе — это делает сам запрос в базе.
+    """
+    for game in await db.get_games_for_review():
+        game_id = game["game_id"]
+        text = texts.REVIEW_ASK.format(game=texts.format_game_short(game))
+
+        asked = 0
+        for user_id in await db.get_players(game_id, "main"):
+            try:
+                await bot.send_message(
+                    user_id, text, reply_markup=kb.review_stars_kb(game_id))
+                asked += 1
+            except Exception as error:
+                logger.warning("Не смог спросить отзыв у %s: %s", user_id, error)
+
+        await db.set_review_asked(game_id)
+        logger.info("Спросил отзыв об игре #%s у %s участников", game_id, asked)
 
 
 # ==========================================================
@@ -127,6 +157,7 @@ def setup_scheduler(bot: Bot) -> AsyncIOScheduler:
         close_past_games,
         trigger="interval",
         hours=1,
+        args=[bot],
         id="close_games",
         replace_existing=True,
     )

@@ -76,6 +76,7 @@ async def init_db() -> None:
                 status            TEXT    NOT NULL DEFAULT 'open',
                 notified_full     INTEGER NOT NULL DEFAULT 0,
                 notified_reminder INTEGER NOT NULL DEFAULT 0,
+                review_asked      INTEGER NOT NULL DEFAULT 0,
                 created_at        TEXT
             )
         """)
@@ -98,6 +99,17 @@ async def init_db() -> None:
                 created_at TEXT
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS reviews (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id    INTEGER NOT NULL,
+                user_id    INTEGER NOT NULL,
+                rating     INTEGER NOT NULL,
+                comment    TEXT,
+                created_at TEXT,
+                UNIQUE(game_id, user_id)
+            )
+        """)
         await _add_missing_columns(db)
         await db.commit()
 
@@ -112,6 +124,7 @@ async def _add_missing_columns(db) -> None:
             "max_players": "INTEGER",
             "duration_min": "INTEGER NOT NULL DEFAULT 90",
             "note": "TEXT",
+            "review_asked": "INTEGER NOT NULL DEFAULT 0",
         },
         "signups": {
             "status": "TEXT NOT NULL DEFAULT 'main'",
@@ -951,3 +964,106 @@ async def get_admins():
             ORDER BY grade, letter, first_name
         """)
         return [dict(row) for row in await cursor.fetchall()]
+
+
+# ==========================================================
+#   ОТЗЫВЫ ОБ ИГРАХ
+# ==========================================================
+
+async def add_review(game_id: int, user_id: int, rating: int) -> bool:
+    """
+    Ставит оценку игре. True — записали, False — этот человек уже оценивал.
+    Комментарий добавляется отдельно, вторым шагом.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("""
+            INSERT OR IGNORE INTO reviews (game_id, user_id, rating, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (game_id, user_id, rating, _stamp()))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def set_review_comment(game_id: int, user_id: int, comment: str) -> None:
+    """Дописывает текст к уже поставленной оценке."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE reviews SET comment = ? WHERE game_id = ? AND user_id = ?",
+            (comment, game_id, user_id))
+        await db.commit()
+
+
+async def has_review(game_id: int, user_id: int) -> bool:
+    """Оценивал ли этот человек эту игру."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT 1 FROM reviews WHERE game_id = ? AND user_id = ?",
+            (game_id, user_id))
+        return await cursor.fetchone() is not None
+
+
+async def get_game_reviews(game_id: int):
+    """Все отзывы об одной игре — с именами и классами авторов."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("""
+            SELECT r.rating, r.comment, r.created_at,
+                   u.first_name, u.grade, u.letter
+            FROM reviews r
+            LEFT JOIN users u ON u.user_id = r.user_id
+            WHERE r.game_id = ?
+            ORDER BY r.id
+        """, (game_id,))
+        return [dict(row) for row in await cursor.fetchall()]
+
+
+async def get_recent_reviews(limit: int = 15):
+    """Свежие отзывы по всем играм — для админской команды /reviews."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("""
+            SELECT r.game_id, r.rating, r.comment, r.created_at,
+                   u.first_name, u.grade, u.letter,
+                   g.sport, g.game_date
+            FROM reviews r
+            LEFT JOIN users u ON u.user_id = r.user_id
+            LEFT JOIN games g ON g.game_id = r.game_id
+            ORDER BY r.id DESC
+            LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in await cursor.fetchall()]
+
+
+async def get_average_rating():
+    """Средняя оценка по всем играм. None, если ещё никто не оценивал."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT AVG(rating), COUNT(*) FROM reviews")
+        average, count = await cursor.fetchone()
+        return (average, count) if count else (None, 0)
+
+
+async def get_games_for_review():
+    """
+    Прошедшие игры, о которых ещё не спрашивали отзыв.
+    Берём только вчерашние и сегодняшние: про игру недельной давности
+    спрашивать поздно и странно.
+    """
+    since = (now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
+    moment = now().strftime("%Y-%m-%d %H:%M")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(GAME_SELECT + """
+            WHERE g.status = 'done'
+              AND g.review_asked = 0
+              AND g.game_date || ' ' || g.game_time BETWEEN ? AND ?
+        """, (since, moment))
+        return [dict(row) for row in await cursor.fetchall()]
+
+
+async def set_review_asked(game_id: int) -> None:
+    """Отмечаем, что про эту игру отзыв уже просили."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE games SET review_asked = 1 WHERE game_id = ?",
+                         (game_id,))
+        await db.commit()

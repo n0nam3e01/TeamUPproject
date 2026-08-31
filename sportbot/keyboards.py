@@ -211,3 +211,21 @@ def max_players_kb() -> ReplyKeyboardMarkup:
 def note_kb() -> ReplyKeyboardMarkup:
     """Заметка необязательна — её можно пропустить."""
     return _reply_kb([texts.BTN_SKIP], per_row=1, with_cancel=True)
+
+
+# ==========================================================
+#   ОТЗЫВЫ
+# ==========================================================
+
+def review_stars_kb(game_id: int) -> InlineKeyboardMarkup:
+    """Пять кнопок с оценками под просьбой оценить игру."""
+    buttons = [
+        InlineKeyboardButton(text=str(value), callback_data=f"rate:{game_id}:{value}")
+        for value in range(1, 6)
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+
+def review_comment_kb() -> ReplyKeyboardMarkup:
+    """Комментарий необязателен."""
+    return _reply_kb([texts.BTN_SKIP_COMMENT], per_row=1)

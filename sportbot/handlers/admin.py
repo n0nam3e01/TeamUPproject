@@ -73,6 +73,7 @@ async def cmd_stats(message: Message) -> None:
 
     stats = await db.get_stats()
     inactive = await db.count_inactive_users(LONG_TIME_DAYS)
+    average, reviews_count = await db.get_average_rating()
 
     # Распределение по классам: «8А — 12»
     if stats["grades"]:
@@ -97,6 +98,9 @@ async def cmd_stats(message: Message) -> None:
         top_sport=stats["top_sport"],
         cross_class=stats["cross_class"],
         inactive=inactive,
+        rating_line=texts.STATS_RATING.format(
+            average=f"{average:.1f}", count=reviews_count)
+        if reviews_count else "",
     ))
 
     logger.info("Организатор запросил статистику")
@@ -631,3 +635,59 @@ async def cmd_removeadmin(message: Message, command: CommandObject) -> None:
     await safe_send(message.bot, user["user_id"], texts.REMOVEADMIN_FOR_USER)
     logger.info("Главный снял права помощника с пользователя %s", user["user_id"])
     await message.answer(texts.REMOVEADMIN_DONE.format(name=name))
+
+
+# ==========================================================
+#   /reviews — отзывы об играх
+# ==========================================================
+
+@router.message(Command("reviews"))
+async def cmd_reviews(message: Message, command: CommandObject) -> None:
+    if not await is_admin(message.from_user.id):
+        await message.answer(texts.NOT_ADMIN)
+        return
+
+    argument = (command.args or "").strip().lstrip("#")
+
+    # С номером — отзывы про одну игру, без номера — свежие по всем
+    if argument:
+        game = await resolve_game(message, argument, "/reviews 12")
+        if game is None:
+            return
+
+        reviews = await db.get_game_reviews(game["game_id"])
+        if not reviews:
+            await message.answer(texts.REVIEWS_GAME_EMPTY)
+            return
+
+        average = sum(r["rating"] for r in reviews) / len(reviews)
+        lines = [texts.REVIEWS_GAME_HEADER.format(
+            game_id=game["game_id"], average=f"{average:.1f}"), ""]
+
+        for review in reviews:
+            author = html.escape(review["first_name"] or "Кто-то")
+            if review["grade"]:
+                author += f" ({review['grade']}{review['letter']})"
+            comment = f" — «{html.escape(review['comment'])}»" if review["comment"] else ""
+            lines.append(f"{texts.stars(review['rating'])} {author}{comment}")
+
+        await message.answer("\n".join(lines))
+        return
+
+    reviews = await db.get_recent_reviews()
+    if not reviews:
+        await message.answer(texts.REVIEWS_EMPTY)
+        return
+
+    lines = [texts.REVIEWS_HEADER.format(count=len(reviews)), ""]
+    for review in reviews:
+        author = html.escape(review["first_name"] or "Кто-то")
+        if review["grade"]:
+            author += f" ({review['grade']}{review['letter']})"
+        comment = f" — «{html.escape(review['comment'])}»" if review["comment"] else ""
+        lines.append(
+            f"<code>#{review['game_id']}</code> {html.escape(review['sport'] or '')} · "
+            f"{texts.stars(review['rating'])} {author}{comment}"
+        )
+
+    await message.answer("\n".join(lines))
