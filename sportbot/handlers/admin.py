@@ -15,7 +15,7 @@ from aiogram.types import BufferedInputFile, Message
 
 import database as db
 import texts
-from config import ADMIN_ID, now
+from config import ADMIN_ID, LONG_TIME_DAYS, now
 
 logger = logging.getLogger(__name__)
 router = Router(name="admin")
@@ -50,6 +50,7 @@ async def cmd_stats(message: Message) -> None:
         return
 
     stats = await db.get_stats()
+    inactive = await db.count_inactive_users(LONG_TIME_DAYS)
 
     # Распределение по классам: «8А — 12»
     if stats["grades"]:
@@ -73,6 +74,7 @@ async def cmd_stats(message: Message) -> None:
         avg_team=avg_team,
         top_sport=stats["top_sport"],
         cross_class=stats["cross_class"],
+        inactive=inactive,
     ))
 
     logger.info("Организатор запросил статистику")
@@ -99,13 +101,15 @@ async def cmd_export(message: Message) -> None:
     games_csv = rows_to_csv(
         headers=[
             "id игры", "id организатора", "вид спорта", "дата", "время",
-            "место", "нужно игроков", "статус",
+            "место", "нужно игроков", "максимум игроков", "минут",
+            "заметка", "статус",
             "уведомление о сборе", "напоминание отправлено", "создана",
         ],
         rows=[[
             game["game_id"], game["creator_id"], game["sport"],
             game["game_date"], game["game_time"], game["place"],
-            game["min_players"], game["status"],
+            game["min_players"], game["max_players"], game["duration_min"],
+            game["note"], game["status"],
             game["notified_full"], game["notified_reminder"], game["created_at"],
         ] for game in games],
     )
@@ -114,11 +118,12 @@ async def cmd_export(message: Message) -> None:
     signups_csv = rows_to_csv(
         headers=[
             "id записи", "id игры", "вид спорта", "дата", "время", "статус игры",
-            "id участника", "имя", "класс", "записался",
+            "состав", "id участника", "имя", "класс", "записался",
         ],
         rows=[[
             row["id"], row["game_id"], row["sport"],
             row["game_date"], row["game_time"], row["game_status"],
+            "основной" if row["signup_status"] == "main" else "очередь",
             row["user_id"], row["first_name"],
             f"{row['grade']}{row['letter']}" if row["grade"] else "",
             row["created_at"],

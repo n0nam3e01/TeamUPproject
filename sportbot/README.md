@@ -210,6 +210,8 @@ sportbot/
 | Добавить вид спорта            | `config.py` | список `SPORTS` (и `SPORT_EMOJI`) |
 | Добавить место                 | `config.py` | список `PLACES`                   |
 | Добавить вариант времени       | `config.py` | список `TIMES`                    |
+| Другие варианты длительности   | `config.py` | словарь `DURATIONS`               |
+| Другие варианты потолка состава| `config.py` | список `MAX_PLAYER_OPTIONS`       |
 | Другие варианты числа игроков  | `config.py` | список `PLAYER_COUNTS`            |
 | Переименовать бота             | `config.py` | `BOT_NAME`                        |
 | Разрешить больше 3 игр         | `config.py` | `MAX_ACTIVE_GAMES`                |

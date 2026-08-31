@@ -64,11 +64,12 @@ async def refresh_card(callback: CallbackQuery, game_id: int, user_id: int) -> N
 
     signed_up = await db.is_signed_up(game_id, user_id)
     is_creator = game["creator_id"] == user_id
-    players = await db.get_players_full(game_id)
+    players = await db.get_players_full(game_id, "main")
+    waiting = await db.get_players_full(game_id, "waiting")
 
     await edit_card(
         callback,
-        texts.format_game_card(game, players),
+        texts.format_game_card(game, players, waiting),
         kb.game_card_kb(game_id, signed_up, is_creator),
     )
 
@@ -85,10 +86,11 @@ async def send_game_card(message: Message, game, user_id: int) -> None:
     """Отправляет карточку игры отдельным сообщением с нужной кнопкой."""
     signed_up = await db.is_signed_up(game["game_id"], user_id)
     is_creator = game["creator_id"] == user_id
-    players = await db.get_players_full(game["game_id"])
+    players = await db.get_players_full(game["game_id"], "main")
+    waiting = await db.get_players_full(game["game_id"], "waiting")
 
     await message.answer(
-        texts.format_game_card(game, players),
+        texts.format_game_card(game, players, waiting),
         reply_markup=kb.game_card_kb(game["game_id"], signed_up, is_creator),
     )
 
@@ -137,9 +139,12 @@ async def do_signup(callback: CallbackQuery, bot: Bot) -> None:
         return
 
     added = await db.add_signup(game_id, user_id)
-    if added:
+    if added == "main":
         await callback.answer(texts.SIGNED_UP)
         logger.info("Пользователь %s записался на игру #%s", user_id, game_id)
+    elif added == "waiting":
+        await callback.answer(texts.SIGNED_UP_WAITING, show_alert=True)
+        logger.info("Пользователь %s встал в очередь на игру #%s", user_id, game_id)
     else:
         # Человек нажал кнопку дважды — дубликат не создаём, просто говорим об этом
         await callback.answer(texts.ALREADY_SIGNED)
@@ -168,7 +173,7 @@ async def check_team_ready(bot: Bot, game_id: int) -> None:
         game=texts.format_game_short(game),
         count=game["players_count"],
     )
-    await notify_players(bot, game_id, text)
+    await notify_players(bot, game_id, text, status="main")
     logger.info("Игра #%s собрана: %s игроков", game_id, game["players_count"])
 
 
@@ -197,6 +202,7 @@ async def do_signout(callback: CallbackQuery, bot: Bot) -> None:
     if removed:
         await callback.answer(texts.SIGNED_OUT)
         logger.info("Пользователь %s отписался от игры #%s", user_id, game_id)
+        await promote_next(bot, game_id)
         await check_team_broken(bot, game_id)
     else:
         await callback.answer(texts.NOT_SIGNED)
@@ -265,3 +271,18 @@ async def share_game(callback: CallbackQuery, bot: Bot) -> None:
         link=link,
     ))
     logger.info("Пользователь %s поделился игрой #%s", callback.from_user.id, game_id)
+
+
+async def promote_next(bot: Bot, game_id: int) -> None:
+    """
+    Кто-то отписался — поднимаем первого из очереди в основной состав
+    и сразу сообщаем ему об этом.
+    """
+    user_id = await db.promote_from_waiting(game_id)
+    if user_id is None:
+        return
+
+    game = await db.get_game(game_id)
+    await safe_send(bot, user_id, texts.PROMOTED.format(
+        game=texts.format_game_card(game)))
+    logger.info("Игрок %s поднят из очереди в состав игры #%s", user_id, game_id)

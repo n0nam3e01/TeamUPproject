@@ -16,7 +16,16 @@ from aiogram.types import (
 )
 
 import texts
-from config import GRADES, LETTERS, PLACES, PLAYER_COUNTS, SPORTS, TIMES
+from config import (
+    DURATIONS,
+    GRADES,
+    LETTERS,
+    MAX_PLAYER_OPTIONS,
+    PLACES,
+    PLAYER_COUNTS,
+    SPORTS,
+    TIMES,
+)
 
 
 def _rows(items: list[str], per_row: int) -> list[list[KeyboardButton]]:
@@ -182,3 +191,23 @@ def letters_inline_kb(grade: int) -> InlineKeyboardMarkup:
     other = [InlineKeyboardButton(text=texts.BTN_OTHER,
                                   callback_data=f"letterother:{grade}")]
     return InlineKeyboardMarkup(inline_keyboard=[buttons, other])
+
+
+# ==========================================================
+#   ДЛИТЕЛЬНОСТЬ, ПОТОЛОК СОСТАВА И ЗАМЕТКА
+# ==========================================================
+
+def durations_kb() -> ReplyKeyboardMarkup:
+    """Сколько длится игра."""
+    return _reply_kb(list(DURATIONS.values()), per_row=2, with_cancel=True)
+
+
+def max_players_kb() -> ReplyKeyboardMarkup:
+    """Потолок состава плюс вариант «без ограничения»."""
+    counts = [str(count) for count in MAX_PLAYER_OPTIONS]
+    return _reply_kb(counts + [texts.BTN_NO_LIMIT], per_row=3, with_cancel=True)
+
+
+def note_kb() -> ReplyKeyboardMarkup:
+    """Заметка необязательна — её можно пропустить."""
+    return _reply_kb([texts.BTN_SKIP], per_row=1, with_cancel=True)

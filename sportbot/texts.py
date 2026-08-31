@@ -6,10 +6,12 @@
 """
 
 import html
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from config import (
     BOT_NAME,
+    DEFAULT_DURATION,
+    DURATIONS,
     CUSTOM_TEXT_MAX_LEN,
     DEFAULT_SPORT_EMOJI,
     MIN_PLAYERS_HIGH,
@@ -46,6 +48,8 @@ BTN_CANCEL_GAME_YES = "Да, отменить"
 BTN_CANCEL_GAME_NO = "Нет, оставить"
 BTN_CREATE_FIRST = "🏀 Создать игру"
 BTN_SHARE = "🔗 Позвать ребят"
+BTN_NO_LIMIT = "Без ограничения"
+BTN_SKIP = "Пропустить"
 BTN_EDIT_CLASS = "✏️ Изменить класс"
 BTN_EDIT_NAME = "✏️ Изменить имя"
 BTN_PROFILE_BACK = "⬅️ Назад к профилю"
@@ -133,6 +137,22 @@ BAD_CUSTOM_PLAYERS = (
     f"Нужно число от {MIN_PLAYERS_LOW} до {MIN_PLAYERS_HIGH}. Попробуй ещё раз:"
 )
 
+ASK_DURATION = "Сколько играем? ⏱"
+BAD_DURATION = "Выбери длительность кнопкой 👇"
+
+ASK_MAX = (
+    "Максимум игроков? Кто не поместится — встанет в очередь\n"
+    "и займёт место, если кто-то откажется."
+)
+BAD_MAX = "Выбери число кнопкой или нажми «Без ограничения» 👇"
+BAD_CUSTOM_MAX = "Максимум не может быть меньше, чем нужно игроков. Попробуй ещё раз:"
+
+ASK_NOTE = (
+    "Добавить заметку? Например: «берите форму» или «играем 3 на 3».\n"
+    "Не нужна — жми «Пропустить»."
+)
+BAD_NOTE = "Слишком длинно. Уложись в {limit} символов:"
+
 CONFIRM_HEADER = "Проверь, всё верно?\n\n"
 
 GAME_IN_PAST = (
@@ -154,6 +174,12 @@ GAME_CREATED = "Готово! Игра создана, зови ребят — �
 
 LIST_HEADER = "📋 Ближайшие игры:"
 LIST_EMPTY = "Пока нет ни одной игры. Создай первую! 🏀"
+
+SIGNED_UP_WAITING = "Мест нет — поставил тебя в очередь ⏳"
+PROMOTED = (
+    "🎉 Освободилось место, ты в основном составе!\n\n{game}"
+)
+PROMOTED_TOAST = "Тебя подняли из очереди в состав ✅"
 
 SIGNED_UP = "Записал тебя ✅"
 SIGNED_OUT = "Отписал. Ничего страшного 👌"
@@ -245,7 +271,8 @@ STATS_TEMPLATE = (
     "Уникальных участников: {unique_players}\n"
     "Средний размер команды: {avg_team}\n"
     "Самый популярный спорт: {top_sport}\n\n"
-    "🤝 <b>Играли с человеком из другого класса:</b> {cross_class} чел."
+    "🤝 <b>Играли с человеком из другого класса:</b> {cross_class} чел.\n"
+    "😴 <b>Давно не играли (или ни разу):</b> {inactive} чел."
 )
 
 EXPORT_CAPTION = "Выгрузка по состоянию на {date}"
@@ -313,19 +340,55 @@ def format_players_list(players) -> str:
     return ", ".join(names)
 
 
-def format_game_card(game, players=None) -> str:
+def format_time_range(game_time: str, duration_min) -> str:
+    """'15:30' + 90 минут -> '15:30 – 17:00 (1,5 часа)'"""
+    minutes = duration_min or DEFAULT_DURATION
+    start = datetime.strptime(game_time, "%H:%M")
+    finish = start + timedelta(minutes=minutes)
+    label = DURATIONS.get(minutes, f"{minutes} мин")
+    return f"{game_time} – {finish.strftime('%H:%M')} ({label})"
+
+
+def days_word(count: int) -> str:
+    """1 день / 2 дня / 5 дней."""
+    if count % 10 == 1 and count % 100 != 11:
+        return "день"
+    if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
+        return "дня"
+    return "дней"
+
+
+def format_last_played(last_date) -> str:
+    """Когда человек играл последний раз — человеческими словами."""
+    if last_date is None:
+        return "ещё ни разу"
+
+    days = (now().date() - datetime.strptime(last_date, "%Y-%m-%d").date()).days
+    if days <= 0:
+        return "сегодня"
+    if days == 1:
+        return "вчера"
+    if days < 30:
+        return f"{days} {days_word(days)} назад"
+    months = days // 30
+    return "больше месяца назад" if months <= 1 else f"больше {months} мес. назад"
+
+
+def format_game_card(game, players=None, waiting=None) -> str:
     """
     Собирает карточку игры — то, что видно в списке.
-    game — строка из базы (словарь с полями игры + players_count + данные организатора).
+
+    game    — строка из базы (поля игры + players_count + данные организатора)
+    players — основной состав; если передан, будут видны имена
+    waiting — очередь; показывается, только если в ней кто-то есть
     """
     sport = game["sport"]
-    emoji = SPORT_EMOJI.get(sport, DEFAULT_SPORT_EMOJI)
+    emoji = sport_emoji(sport)
 
     # Организатор мог не успеть зарегистрироваться — подстрахуемся
     creator_name = game["creator_name"] or "Кто-то"
     if game["creator_grade"]:
-        creator_class = f"{game['creator_grade']}{game['creator_letter']}"
-        creator = f"{creator_name} ({creator_class})"
+        creator = f"{creator_name} ({game['creator_grade']}{game['creator_letter']})"
     else:
         creator = creator_name
 
@@ -335,15 +398,29 @@ def format_game_card(game, players=None) -> str:
     # Номер игры — по нему удобно ссылаться: «пойдём на 12-ю»
     number = f" · #{game['game_id']}" if game.get("game_id") else ""
 
-    # Состав показываем только там, где он передан
+    # Заметка организатора — отдельной строкой, если она есть
+    note = f"💬 {html.escape(game['note'])}\n" if game.get("note") else ""
+
+    # Когда мест больше нет, честно об этом пишем
+    max_players = game.get("max_players")
+    no_seats = " · мест больше нет" if max_players and count >= max_players else ""
+
     roster = "\n   " + format_players_list(players) if players else ""
+
+    # Очередь показываем, только когда в ней реально кто-то стоит
+    queue = ""
+    if waiting:
+        queue = (f"⏳ В очереди: {len(waiting)}\n"
+                 f"   {format_players_list(waiting)}\n")
 
     return (
         f"{emoji} <b>{html.escape(sport)}</b>{number}\n"
         f"📅 {format_date_full(game['game_date'])}\n"
-        f"🕒 {game['game_time']}\n"
+        f"🕒 {format_time_range(game['game_time'], game.get('duration_min'))}\n"
         f"📍 {html.escape(game['place'])}\n"
-        f"👥 Записались: {count} из {game['min_players']}{ready}{roster}\n"
+        f"{note}"
+        f"👥 Записались: {count} из {game['min_players']}{ready}{no_seats}{roster}\n"
+        f"{queue}"
         f"🙋 Организатор: {html.escape(creator)}"
     )
 
@@ -364,7 +441,7 @@ def classes_word(count: int) -> str:
     return "классов"
 
 
-def format_profile(user, stats) -> str:
+def format_profile(user, stats, last_date=None) -> str:
     """
     Собирает экран профиля: данные человека плюс его личная статистика.
     user  — строка из таблицы users
@@ -381,6 +458,7 @@ def format_profile(user, stats) -> str:
         joined = "давно"
 
     favourite = html.escape(stats["favourite"]) if stats["favourite"] else "пока не ясно"
+    last_played = format_last_played(last_date)
 
     met = stats["classes_met"]
     met_text = f"с ребятами из {met} {classes_word(met)}" if met else "пока только один"
@@ -395,6 +473,7 @@ def format_profile(user, stats) -> str:
         f"Организовал игр: {stats['created']}\n"
         f"Участвовал в играх: {stats['joined']}\n"
         f"Любимый спорт: {favourite}\n"
+        f"Последняя игра: {last_played}\n"
         f"Играл {met_text}"
     )
 

@@ -10,6 +10,8 @@
 так проще и невозможно забыть его закрыть.
 """
 
+from datetime import timedelta
+
 import aiosqlite
 
 from config import DB_PATH, now
@@ -25,7 +27,10 @@ def _stamp() -> str:
 GAME_SELECT = """
 SELECT
     g.*,
-    (SELECT COUNT(*) FROM signups s WHERE s.game_id = g.game_id) AS players_count,
+    (SELECT COUNT(*) FROM signups s
+     WHERE s.game_id = g.game_id AND s.status = 'main')    AS players_count,
+    (SELECT COUNT(*) FROM signups s
+     WHERE s.game_id = g.game_id AND s.status = 'waiting') AS waiting_count,
     u.first_name AS creator_name,
     u.grade      AS creator_grade,
     u.letter     AS creator_letter
@@ -63,6 +68,9 @@ async def init_db() -> None:
                 game_time         TEXT    NOT NULL,
                 place             TEXT    NOT NULL,
                 min_players       INTEGER NOT NULL,
+                max_players       INTEGER,
+                duration_min      INTEGER NOT NULL DEFAULT 90,
+                note              TEXT,
                 status            TEXT    NOT NULL DEFAULT 'open',
                 notified_full     INTEGER NOT NULL DEFAULT 0,
                 notified_reminder INTEGER NOT NULL DEFAULT 0,
@@ -74,11 +82,37 @@ async def init_db() -> None:
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 game_id    INTEGER NOT NULL,
                 user_id    INTEGER NOT NULL,
+                status     TEXT NOT NULL DEFAULT 'main',
                 created_at TEXT,
                 UNIQUE(game_id, user_id)
             )
         """)
+        await _add_missing_columns(db)
         await db.commit()
+
+
+async def _add_missing_columns(db) -> None:
+    """
+    Дописывает новые колонки в базу, созданную предыдущей версией бота.
+    Без этого старый data.db перестал бы открываться после обновления.
+    """
+    new_columns = {
+        "games": {
+            "max_players": "INTEGER",
+            "duration_min": "INTEGER NOT NULL DEFAULT 90",
+            "note": "TEXT",
+        },
+        "signups": {
+            "status": "TEXT NOT NULL DEFAULT 'main'",
+        },
+    }
+
+    for table, columns in new_columns.items():
+        cursor = await db.execute(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in await cursor.fetchall()}
+        for name, kind in columns.items():
+            if name not in existing:
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
 
 
 # ==========================================================
@@ -115,20 +149,29 @@ async def add_user(user_id: int, username: str, first_name: str,
 # ==========================================================
 
 async def create_game(creator_id: int, sport: str, game_date: str, game_time: str,
-                      place: str, min_players: int) -> int:
-    """Создаёт игру и сразу записывает на неё организатора. Возвращает id новой игры."""
+                      place: str, min_players: int, max_players=None,
+                      duration_min: int = 90, note=None) -> int:
+    """
+    Создаёт игру и сразу записывает на неё организатора. Возвращает id новой игры.
+
+    max_players — потолок состава; None означает «сколько угодно»
+    duration_min — сколько минут длится игра
+    note — необязательная заметка от организатора
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute("""
             INSERT INTO games (creator_id, sport, game_date, game_time, place,
-                               min_players, status, notified_full,
-                               notified_reminder, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'open', 0, 0, ?)
-        """, (creator_id, sport, game_date, game_time, place, min_players, _stamp()))
+                               min_players, max_players, duration_min, note,
+                               status, notified_full, notified_reminder, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 0, 0, ?)
+        """, (creator_id, sport, game_date, game_time, place, min_players,
+              max_players, duration_min, note, _stamp()))
         game_id = cursor.lastrowid
 
-        # Организатор автоматически становится первым игроком
+        # Организатор автоматически становится первым игроком основного состава
         await db.execute("""
-            INSERT INTO signups (game_id, user_id, created_at) VALUES (?, ?, ?)
+            INSERT INTO signups (game_id, user_id, status, created_at)
+            VALUES (?, ?, 'main', ?)
         """, (game_id, creator_id, _stamp()))
 
         await db.commit()
@@ -233,18 +276,41 @@ async def set_notified_reminder(game_id: int, value: int) -> None:
 #   ЗАПИСЬ НА ИГРУ
 # ==========================================================
 
-async def add_signup(game_id: int, user_id: int) -> bool:
+async def add_signup(game_id: int, user_id: int):
     """
     Записывает человека на игру.
-    True — записали, False — он уже был записан (спасает UNIQUE в таблице).
+
+    Возвращает:
+      'main'    — попал в основной состав
+      'waiting' — мест не было, встал в очередь
+      None      — он уже был записан (спасает UNIQUE в таблице)
     """
     async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Есть ли потолок и не упёрлись ли мы в него
+        cursor = await db.execute(
+            "SELECT max_players FROM games WHERE game_id = ?", (game_id,))
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        max_players = row["max_players"]
+
+        place = "main"
+        if max_players:
+            cursor = await db.execute(
+                "SELECT COUNT(*) AS c FROM signups "
+                "WHERE game_id = ? AND status = 'main'", (game_id,))
+            if (await cursor.fetchone())["c"] >= max_players:
+                place = "waiting"
+
         cursor = await db.execute("""
-            INSERT OR IGNORE INTO signups (game_id, user_id, created_at)
-            VALUES (?, ?, ?)
-        """, (game_id, user_id, _stamp()))
+            INSERT OR IGNORE INTO signups (game_id, user_id, status, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (game_id, user_id, place, _stamp()))
         await db.commit()
-        return cursor.rowcount > 0
+
+        return place if cursor.rowcount > 0 else None
 
 
 async def remove_signup(game_id: int, user_id: int) -> bool:
@@ -268,14 +334,22 @@ async def is_signed_up(game_id: int, user_id: int) -> bool:
         return await cursor.fetchone() is not None
 
 
-async def get_players(game_id: int):
-    """Список telegram id всех, кто записан на игру — для рассылки уведомлений."""
+async def get_players(game_id: int, status=None):
+    """
+    Telegram id тех, кто записан на игру — для рассылки уведомлений.
+    status='main' — только основной состав, 'waiting' — только очередь,
+    None — вообще все.
+    """
+    query = "SELECT user_id FROM signups WHERE game_id = ?"
+    params = [game_id]
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    query += " ORDER BY id"
+
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT user_id FROM signups WHERE game_id = ?", (game_id,)
-        )
-        rows = await cursor.fetchall()
-        return [row[0] for row in rows]
+        cursor = await db.execute(query, params)
+        return [row[0] for row in await cursor.fetchall()]
 
 
 # ==========================================================
@@ -427,6 +501,7 @@ async def export_signups():
                 g.game_date,
                 g.game_time,
                 g.status AS game_status,
+                s.status AS signup_status,
                 s.user_id,
                 u.first_name,
                 u.grade,
@@ -523,10 +598,10 @@ async def get_profile_stats(user_id: int) -> dict:
     }
 
 
-async def get_players_full(game_id: int):
+async def get_players_full(game_id: int, status: str = "main"):
     """
     Кто записан на игру — с именами и классами, в порядке записи.
-    Нужно, чтобы показывать состав прямо в карточке игры.
+    status='main' — основной состав, 'waiting' — очередь.
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -534,7 +609,77 @@ async def get_players_full(game_id: int):
             SELECT u.user_id, u.first_name, u.grade, u.letter
             FROM signups s
             LEFT JOIN users u ON u.user_id = s.user_id
-            WHERE s.game_id = ?
+            WHERE s.game_id = ? AND s.status = ?
             ORDER BY s.id
-        """, (game_id,))
+        """, (game_id, status))
         return [dict(row) for row in await cursor.fetchall()]
+
+
+async def promote_from_waiting(game_id: int):
+    """
+    Поднимает первого из очереди в основной состав, если там освободилось место.
+    Возвращает telegram id того, кого подняли, или None.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        cursor = await db.execute(
+            "SELECT max_players FROM games WHERE game_id = ?", (game_id,))
+        row = await cursor.fetchone()
+        if row is None or not row["max_players"]:
+            return None            # потолка нет — очереди быть не может
+
+        cursor = await db.execute(
+            "SELECT COUNT(*) AS c FROM signups "
+            "WHERE game_id = ? AND status = 'main'", (game_id,))
+        if (await cursor.fetchone())["c"] >= row["max_players"]:
+            return None            # мест всё ещё нет
+
+        # Берём того, кто встал в очередь раньше всех
+        cursor = await db.execute(
+            "SELECT id, user_id FROM signups "
+            "WHERE game_id = ? AND status = 'waiting' ORDER BY id LIMIT 1",
+            (game_id,))
+        first = await cursor.fetchone()
+        if first is None:
+            return None            # очередь пуста
+
+        await db.execute("UPDATE signups SET status = 'main' WHERE id = ?",
+                         (first["id"],))
+        await db.commit()
+        return first["user_id"]
+
+
+async def get_last_played(user_id: int):
+    """
+    Когда человек последний раз играл: дата вида '2026-08-18' или None.
+    Считаются только игры, которые уже прошли и не были отменены.
+    """
+    moment = now().strftime("%Y-%m-%d %H:%M")
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("""
+            SELECT MAX(g.game_date) AS last_date
+            FROM signups s
+            JOIN games g ON g.game_id = s.game_id
+            WHERE s.user_id = ?
+              AND s.status = 'main'
+              AND g.status != 'cancelled'
+              AND g.game_date || ' ' || g.game_time < ?
+        """, (user_id, moment))
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+
+async def count_inactive_users(days: int) -> int:
+    """Сколько зарегистрированных ни разу не играли или не играли дольше days дней."""
+    total = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT user_id FROM users")
+        user_ids = [row[0] for row in await cursor.fetchall()]
+
+    threshold = (now() - timedelta(days=days)).date().isoformat()
+    for user_id in user_ids:
+        last = await get_last_played(user_id)
+        if last is None or last < threshold:
+            total += 1
+    return total

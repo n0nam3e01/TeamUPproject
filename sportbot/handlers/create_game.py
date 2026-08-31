@@ -2,7 +2,8 @@
 Пошаговое создание игры.
 
 Шаги идут по очереди (это называется FSM — «машина состояний»):
-спорт -> день -> время -> место -> сколько игроков -> подтверждение.
+спорт -> день -> время -> длительность -> место -> сколько игроков ->
+максимум игроков -> заметка -> подтверждение.
 
 На каждом шаге бот помнит, что уже выбрано, и ждёт ответ только на текущий вопрос.
 Кнопка «⬅️ Отмена» на любом шаге возвращает в главное меню.
@@ -22,6 +23,9 @@ import keyboards as kb
 import texts
 from config import (
     CUSTOM_TEXT_MAX_LEN,
+    DURATIONS,
+    MAX_PLAYER_OPTIONS,
+    NOTE_MAX_LEN,
     MAX_ACTIVE_GAMES,
     MIN_PLAYERS_HIGH,
     MIN_PLAYERS_LOW,
@@ -45,10 +49,13 @@ class CreateGame(StatesGroup):
     custom_day = State()
     time = State()
     custom_time = State()
+    duration = State()
     place = State()
     custom_place = State()
     players = State()
     custom_players = State()
+    max_players = State()
+    note = State()
     confirm = State()
 
 
@@ -96,6 +103,9 @@ async def build_preview(state: FSMContext, user: dict) -> str:
         "game_time": data["game_time"],
         "place": data["place"],
         "min_players": data["min_players"],
+        "max_players": data.get("max_players"),
+        "duration_min": data["duration_min"],
+        "note": data.get("note"),
         "players_count": 1,               # организатор считается первым игроком
         "creator_name": user["first_name"],
         "creator_grade": user["grade"],
@@ -249,8 +259,8 @@ async def apply_time(message: Message, state: FSMContext, game_time: str) -> Non
         return
 
     await state.update_data(game_time=game_time)
-    await message.answer(texts.ASK_PLACE, reply_markup=kb.places_kb())
-    await state.set_state(CreateGame.place)
+    await message.answer(texts.ASK_DURATION, reply_markup=kb.durations_kb())
+    await state.set_state(CreateGame.duration)
 
 
 @router.message(CreateGame.time)
@@ -281,7 +291,26 @@ async def step_custom_time(message: Message, state: FSMContext) -> None:
 
 
 # ==========================================================
-#   ШАГ 4: МЕСТО
+#   ШАГ 4: СКОЛЬКО ДЛИТСЯ ИГРА
+# ==========================================================
+
+@router.message(CreateGame.duration)
+async def step_duration(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+
+    # DURATIONS хранит минуты -> надпись; ищем минуты по надписи
+    minutes = next((m for m, label in DURATIONS.items() if label == text), None)
+    if minutes is None:
+        await message.answer(texts.BAD_DURATION, reply_markup=kb.durations_kb())
+        return
+
+    await state.update_data(duration_min=minutes)
+    await message.answer(texts.ASK_PLACE, reply_markup=kb.places_kb())
+    await state.set_state(CreateGame.place)
+
+
+# ==========================================================
+#   ШАГ 5: МЕСТО
 # ==========================================================
 
 @router.message(CreateGame.place)
@@ -346,7 +375,7 @@ async def step_players(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(min_players=int(text))
-    await show_confirm(message, state)
+    await ask_max(message, state)
 
 
 @router.message(CreateGame.custom_players)
@@ -358,11 +387,70 @@ async def step_custom_players(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(min_players=int(text))
+    await ask_max(message, state)
+
+
+# ==========================================================
+#   ШАГ 7: ПОТОЛОК СОСТАВА И ЗАМЕТКА
+# ==========================================================
+
+async def ask_max(message: Message, state: FSMContext) -> None:
+    await message.answer(texts.ASK_MAX, reply_markup=kb.max_players_kb())
+    await state.set_state(CreateGame.max_players)
+
+
+async def ask_note(message: Message, state: FSMContext) -> None:
+    await message.answer(texts.ASK_NOTE, reply_markup=kb.note_kb())
+    await state.set_state(CreateGame.note)
+
+
+async def save_max(message: Message, state: FSMContext, value) -> None:
+    """Проверяет, что потолок не меньше нужного количества, и идёт дальше."""
+    data = await state.get_data()
+    if value is not None and value < data["min_players"]:
+        await message.answer(texts.BAD_CUSTOM_MAX, reply_markup=kb.max_players_kb())
+        await state.set_state(CreateGame.max_players)
+        return
+
+    await state.update_data(max_players=value)
+    await ask_note(message, state)
+
+
+@router.message(CreateGame.max_players)
+async def step_max(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+
+    if text == texts.BTN_NO_LIMIT:
+        await save_max(message, state, None)
+        return
+
+    if text not in [str(count) for count in MAX_PLAYER_OPTIONS]:
+        await message.answer(texts.BAD_MAX, reply_markup=kb.max_players_kb())
+        return
+
+    await save_max(message, state, int(text))
+
+
+@router.message(CreateGame.note)
+async def step_note(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+
+    if text == texts.BTN_SKIP:
+        await state.update_data(note=None)
+        await show_confirm(message, state)
+        return
+
+    if len(text) > NOTE_MAX_LEN:
+        await message.answer(texts.BAD_NOTE.format(limit=NOTE_MAX_LEN),
+                             reply_markup=kb.note_kb())
+        return
+
+    await state.update_data(note=text or None)
     await show_confirm(message, state)
 
 
 # ==========================================================
-#   ШАГ 6: ПОДТВЕРЖДЕНИЕ И СОХРАНЕНИЕ
+#   ШАГ 8: ПОДТВЕРЖДЕНИЕ И СОХРАНЕНИЕ
 # ==========================================================
 
 @router.message(CreateGame.confirm)
@@ -404,6 +492,9 @@ async def step_confirm(message: Message, state: FSMContext) -> None:
         game_time=data["game_time"],
         place=data["place"],
         min_players=data["min_players"],
+        max_players=data.get("max_players"),
+        duration_min=data["duration_min"],
+        note=data.get("note"),
     )
     await state.clear()
 

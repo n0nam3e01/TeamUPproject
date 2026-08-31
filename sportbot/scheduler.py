@@ -46,14 +46,19 @@ async def safe_send(bot: Bot, user_id: int, text: str) -> bool:
 
 
 async def notify_players(bot: Bot, game_id: int, text: str,
-                         skip_user_id: int | None = None) -> int:
+                         skip_user_id: int | None = None,
+                         status: str | None = None) -> int:
     """
-    Рассылает сообщение всем, кто записан на игру.
-    skip_user_id — кого пропустить (например, самого организатора).
+    Рассылает сообщение тем, кто записан на игру.
+
+    skip_user_id — кого пропустить (например, самого организатора)
+    status — 'main' только основному составу, None (по умолчанию) — вообще всем,
+             включая очередь: отмену игры должны узнать и они
+
     Возвращает, скольким удалось написать.
     """
     sent = 0
-    for user_id in await db.get_players(game_id):
+    for user_id in await db.get_players(game_id, status):
         if user_id == skip_user_id:
             continue
         if await safe_send(bot, user_id, text):
@@ -82,7 +87,7 @@ async def check_reminders(bot: Bot) -> None:
             game=texts.format_game_short(game),
             count=game["players_count"],
         )
-        sent = await notify_players(bot, game["game_id"], text)
+        sent = await notify_players(bot, game["game_id"], text, status="main")
         await db.set_notified_reminder(game["game_id"], 1)
 
         logger.info(
