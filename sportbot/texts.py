@@ -259,6 +259,72 @@ REMINDER = "⏰ Через час игра: {game}. Нас {count}."
 
 NOT_ADMIN = "Эта команда только для организатора проекта"
 
+ADMIN_HELP = (
+    "🛠 <b>Команды организатора</b>\n\n"
+    "/stats — цифры для отчёта\n"
+    "/export — выгрузка в CSV\n\n"
+    "/games — все игры с номерами\n"
+    "/who 12 — кто записан на игру №12\n"
+    "/delete_game 12 — убрать игру №12\n\n"
+    "/users — список учеников\n"
+    "/warn @ник причина — выдать предупреждение\n"
+    "/warns @ник — история предупреждений\n\n"
+    "<i>Вместо @ника можно указать telegram id — "
+    "у некоторых ника просто нет.</i>"
+)
+
+# --- поиск человека ---
+ADMIN_NEED_USER = (
+    "Укажи, кому. Например:\n<code>{example}</code>"
+)
+ADMIN_USER_NOT_FOUND = (
+    "Не нашёл такого. Искать можно по @нику, по имени или по telegram id — "
+    "всё это видно в /users."
+)
+ADMIN_USER_AMBIGUOUS = (
+    "С именем «{name}» таких несколько ({count}). Укажи @ник или telegram id — они видны в /users."
+)
+
+# --- предупреждения ---
+ADMIN_NEED_REASON = (
+    "Напиши причину после ника. Например:\n"
+    "<code>/warn @{nick} мат в названии игры</code>"
+)
+WARN_SENT = "Предупреждение отправлено. У {name} их теперь {count}."
+WARN_NOT_DELIVERED = (
+    "Предупреждение записано, но доставить не вышло — "
+    "человек, похоже, заблокировал бота."
+)
+WARN_FOR_USER = (
+    "⚠️ <b>Предупреждение от организатора проекта</b>\n\n{reason}"
+)
+WARNS_HEADER = "⚠️ Предупреждения: {name} ({count})"
+WARNS_EMPTY = "У {name} нет предупреждений 👌"
+PROFILE_WARNINGS = "\n⚠️ Предупреждений: {count}"
+
+# --- игры ---
+ADMIN_NEED_GAME = (
+    "Укажи номер игры. Например:\n<code>{example}</code>\n\n"
+    "Номера видно в /games."
+)
+ADMIN_GAME_NOT_FOUND = "Игры с таким номером нет. Загляни в /games."
+ADMIN_GAMES_HEADER = "🎮 <b>Игры</b> (последние {count})"
+ADMIN_GAMES_EMPTY = "Игр пока нет."
+ADMIN_GAME_DELETED = "Игра #{game_id} убрана. Записавшимся сообщил ({sent} чел.)."
+GAME_DELETED_FOR_PLAYERS = (
+    "❌ Игру убрал организатор проекта.\n\n{game}"
+)
+
+# --- кто записан ---
+WHO_MAIN = "✅ <b>Основной состав</b> ({count}):"
+WHO_WAITING = "⏳ <b>Очередь</b> ({count}):"
+WHO_EMPTY = "На эту игру ещё никто не записан."
+
+# --- пользователи ---
+USERS_HEADER = "👥 <b>Ученики</b> ({count})"
+USERS_EMPTY = "Пока никто не зарегистрировался."
+
+
 STATS_TEMPLATE = (
     f"📊 <b>Статистика {BOT_NAME}</b>\n\n"
     "👤 <b>Пользователей:</b> {users_total}\n"
@@ -441,7 +507,7 @@ def classes_word(count: int) -> str:
     return "классов"
 
 
-def format_profile(user, stats, last_date=None) -> str:
+def format_profile(user, stats, last_date=None, warnings=0) -> str:
     """
     Собирает экран профиля: данные человека плюс его личная статистика.
     user  — строка из таблицы users
@@ -459,6 +525,8 @@ def format_profile(user, stats, last_date=None) -> str:
 
     favourite = html.escape(stats["favourite"]) if stats["favourite"] else "пока не ясно"
     last_played = format_last_played(last_date)
+    # Предупреждения показываем, только если они есть
+    warns = PROFILE_WARNINGS.format(count=warnings) if warnings else ""
 
     met = stats["classes_met"]
     met_text = f"с ребятами из {met} {classes_word(met)}" if met else "пока только один"
@@ -475,6 +543,7 @@ def format_profile(user, stats, last_date=None) -> str:
         f"Любимый спорт: {favourite}\n"
         f"Последняя игра: {last_played}\n"
         f"Играл {met_text}"
+        f"{warns}"
     )
 
 

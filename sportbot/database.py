@@ -87,6 +87,15 @@ async def init_db() -> None:
                 UNIQUE(game_id, user_id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS warnings (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL,
+                admin_id   INTEGER NOT NULL,
+                reason     TEXT,
+                created_at TEXT
+            )
+        """)
         await _add_missing_columns(db)
         await db.commit()
 
@@ -431,7 +440,7 @@ async def get_stats() -> dict:
         # Самый популярный вид спорта
         cursor = await db.execute("""
             SELECT sport, COUNT(*) AS c FROM games
-            WHERE status != 'cancelled'
+            WHERE status NOT IN ('cancelled', 'deleted')
             GROUP BY sport
             ORDER BY c DESC
             LIMIT 1
@@ -446,7 +455,7 @@ async def get_stats() -> dict:
             FROM signups s
             JOIN games g ON g.game_id = s.game_id
             JOIN users u ON u.user_id = s.user_id
-            WHERE g.status != 'cancelled'
+            WHERE g.status NOT IN ('cancelled', 'deleted')
         """)
         rows = [dict(row) for row in await cursor.fetchall()]
 
@@ -551,7 +560,7 @@ async def get_profile_stats(user_id: int) -> dict:
         # Сколько игр организовал
         cursor = await db.execute("""
             SELECT COUNT(*) AS c FROM games
-            WHERE creator_id = ? AND status != 'cancelled'
+            WHERE creator_id = ? AND status NOT IN ('cancelled', 'deleted')
         """, (user_id,))
         created = (await cursor.fetchone())["c"]
 
@@ -560,7 +569,7 @@ async def get_profile_stats(user_id: int) -> dict:
             SELECT COUNT(*) AS c
             FROM signups s
             JOIN games g ON g.game_id = s.game_id
-            WHERE s.user_id = ? AND g.status != 'cancelled'
+            WHERE s.user_id = ? AND g.status NOT IN ('cancelled', 'deleted')
         """, (user_id,))
         joined = (await cursor.fetchone())["c"]
 
@@ -569,7 +578,7 @@ async def get_profile_stats(user_id: int) -> dict:
             SELECT g.sport, COUNT(*) AS c
             FROM signups s
             JOIN games g ON g.game_id = s.game_id
-            WHERE s.user_id = ? AND g.status != 'cancelled'
+            WHERE s.user_id = ? AND g.status NOT IN ('cancelled', 'deleted')
             GROUP BY g.sport
             ORDER BY c DESC
             LIMIT 1
@@ -586,7 +595,7 @@ async def get_profile_stats(user_id: int) -> dict:
                  ON others.game_id = mine.game_id AND others.user_id != mine.user_id
             JOIN games g ON g.game_id = mine.game_id
             JOIN users u ON u.user_id = others.user_id
-            WHERE mine.user_id = ? AND g.status != 'cancelled'
+            WHERE mine.user_id = ? AND g.status NOT IN ('cancelled', 'deleted')
         """, (user_id,))
         classes = {f"{r['grade']}{r['letter']}" for r in await cursor.fetchall()}
 
@@ -663,7 +672,7 @@ async def get_last_played(user_id: int):
             JOIN games g ON g.game_id = s.game_id
             WHERE s.user_id = ?
               AND s.status = 'main'
-              AND g.status != 'cancelled'
+              AND g.status NOT IN ('cancelled', 'deleted')
               AND g.game_date || ' ' || g.game_time < ?
         """, (user_id, moment))
         row = await cursor.fetchone()
@@ -683,3 +692,154 @@ async def count_inactive_users(days: int) -> int:
         if last is None or last < threshold:
             total += 1
     return total
+
+
+# ==========================================================
+#   АДМИНСКИЕ ФУНКЦИИ
+# ==========================================================
+
+async def find_user(query: str):
+    """
+    Ищет человека по @нику или по telegram id.
+    Ник можно писать с собачкой и в любом регистре: @Alinur, alinur, ALINUR.
+    Возвращает пользователя словарём или None.
+    """
+    cleaned = (query or "").strip().lstrip("@")
+    if not cleaned:
+        return None
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Сначала пробуем как ник (регистр не важен)
+        cursor = await db.execute(
+            "SELECT * FROM users WHERE LOWER(username) = LOWER(?) AND username != ''",
+            (cleaned,))
+        row = await cursor.fetchone()
+        if row:
+            return dict(row)
+
+        # Если это число — пробуем как telegram id
+        if cleaned.isdigit():
+            cursor = await db.execute(
+                "SELECT * FROM users WHERE user_id = ?", (int(cleaned),))
+            row = await cursor.fetchone()
+            if row:
+                return dict(row)
+
+        # Последняя попытка — по имени. Годится, только если такой один:
+        # двух Дан различить невозможно, тогда пусть админ укажет ник или id.
+        #
+        # Сравниваем регистр в Python, а не в SQL: SQLite умеет приводить
+        # к нижнему регистру только латиницу, и «Дана» с «дана» для него разные.
+        cursor = await db.execute("SELECT * FROM users")
+        matches = [
+            dict(row) for row in await cursor.fetchall()
+            if (row["first_name"] or "").lower() == cleaned.lower()
+        ]
+        if len(matches) == 1:
+            return matches[0]
+
+    return None
+
+
+async def count_users_by_name(name: str) -> int:
+    """Сколько человек с таким именем — чтобы объяснить админу неоднозначность."""
+    wanted = (name or "").strip().lstrip("@").lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT first_name FROM users")
+        return sum(
+            1 for row in await cursor.fetchall()
+            if (row["first_name"] or "").lower() == wanted
+        )
+
+
+async def add_warning(user_id: int, admin_id: int, reason: str) -> int:
+    """Записывает предупреждение и возвращает, сколько их теперь у человека всего."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO warnings (user_id, admin_id, reason, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, admin_id, reason, _stamp()))
+        await db.commit()
+
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM warnings WHERE user_id = ?", (user_id,))
+        return (await cursor.fetchone())[0]
+
+
+async def count_warnings(user_id: int) -> int:
+    """Сколько предупреждений у человека."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM warnings WHERE user_id = ?", (user_id,))
+        return (await cursor.fetchone())[0]
+
+
+async def get_warnings(user_id: int):
+    """Все предупреждения человека, свежие сверху."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("""
+            SELECT reason, created_at FROM warnings
+            WHERE user_id = ? ORDER BY id DESC
+        """, (user_id,))
+        return [dict(row) for row in await cursor.fetchall()]
+
+
+async def delete_game(game_id: int) -> bool:
+    """
+    Убирает игру из бота: статус становится 'deleted'.
+    Сама строка остаётся в базе, чтобы отчёт по проекту не потерял историю,
+    но нигде — ни в списках, ни в статистике — игра больше не появляется.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE games SET status = 'deleted' WHERE game_id = ? "
+            "AND status != 'deleted'", (game_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def get_all_games_admin(limit: int = 30):
+    """Все игры для админского списка — свежие сверху, включая прошедшие."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(GAME_SELECT + """
+            WHERE g.status != 'deleted'
+            ORDER BY g.game_date DESC, g.game_time DESC
+            LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in await cursor.fetchall()]
+
+
+async def get_users_overview():
+    """
+    Сводка по всем пользователям для команды /users:
+    кто это, из какого класса, сколько игр, когда играл, сколько предупреждений.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("""
+            SELECT
+                u.user_id,
+                u.username,
+                u.first_name,
+                u.grade,
+                u.letter,
+                (SELECT COUNT(*) FROM signups s
+                 JOIN games g ON g.game_id = s.game_id
+                 WHERE s.user_id = u.user_id
+                   AND g.status NOT IN ('cancelled', 'deleted')) AS games_count,
+                (SELECT COUNT(*) FROM warnings w
+                 WHERE w.user_id = u.user_id) AS warnings_count
+            FROM users u
+            ORDER BY u.grade, u.letter, u.first_name
+        """)
+        users = [dict(row) for row in await cursor.fetchall()]
+
+    # Дату последней игры считаем отдельной функцией — она уже есть выше
+    for user in users:
+        user["last_played"] = await get_last_played(user["user_id"])
+    return users

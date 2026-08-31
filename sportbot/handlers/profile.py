@@ -44,7 +44,8 @@ async def build_profile(user_id: int) -> str | None:
         return None
     stats = await db.get_profile_stats(user_id)
     last_date = await db.get_last_played(user_id)
-    return texts.format_profile(user, stats, last_date)
+    warnings = await db.count_warnings(user_id)
+    return texts.format_profile(user, stats, last_date, warnings)
 
 
 async def send_profile(message: Message, user_id: int) -> None:

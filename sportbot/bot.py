@@ -55,8 +55,15 @@ async def setup_commands(bot: Bot) -> None:
     # Команды организатора видны только в твоём личном чате с ботом
     if ADMIN_ID:
         admin_only = common + [
+            BotCommand(command="admin", description="Команды организатора"),
             BotCommand(command="stats", description="Статистика проекта"),
             BotCommand(command="export", description="Выгрузить данные в CSV"),
+            BotCommand(command="games", description="Все игры с номерами"),
+            BotCommand(command="who", description="Кто записан на игру"),
+            BotCommand(command="delete_game", description="Убрать игру"),
+            BotCommand(command="users", description="Список учеников"),
+            BotCommand(command="warn", description="Выдать предупреждение"),
+            BotCommand(command="warns", description="История предупреждений"),
         ]
         await bot.set_my_commands(admin_only, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
 
