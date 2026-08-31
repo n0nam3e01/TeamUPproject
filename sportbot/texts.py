@@ -268,10 +268,47 @@ ADMIN_HELP = (
     "/delete_game 12 — убрать игру №12\n\n"
     "/users — список учеников\n"
     "/warn @ник причина — выдать предупреждение\n"
-    "/warns @ник — история предупреждений\n\n"
+    "/warns @ник — история предупреждений\n"
+    "/clearwarns @ник — стереть предупреждения\n\n"
+    "/ban @ник 7 причина — закрыть создание игр на 7 дней\n"
+    "/unban @ник — снять запрет\n\n"
     "<i>Вместо @ника можно указать telegram id — "
     "у некоторых ника просто нет.</i>"
 )
+
+# --- блокировка создания игр ---
+ADMIN_NEED_BAN_ARGS = (
+    "Формат: <code>/ban @ник дней причина</code>\n"
+    "Например: <code>/ban @alinur 7 создавал игры-шутки</code>"
+)
+ADMIN_BAD_BAN_DAYS = "Число дней должно быть от 1 до {limit}."
+BAN_SET = "{name} не сможет создавать игры {until}. Записываться на чужие — может."
+BAN_FOR_USER = (
+    "🚫 <b>Создание игр закрыто {until}</b>\n\n"
+    "Причина: {reason}\n\n"
+    "Записываться на игры других ты по-прежнему можешь — играй дальше."
+)
+BAN_AUTO_FOR_USER = (
+    "🚫 <b>Создание игр закрыто {until}</b>\n\n"
+    "Это произошло автоматически: предупреждений набралось {count}.\n\n"
+    "Записываться на игры других ты по-прежнему можешь."
+)
+BAN_AUTO_NOTICE = (
+    "Предупреждений у {name} стало {count} — создание игр закрыто автоматически {until}."
+)
+UNBAN_DONE = "Снял запрет с {name} — снова может создавать игры."
+UNBAN_FOR_USER = "✅ Запрет снят — можешь снова создавать игры 🏀"
+UNBAN_NOT_BANNED = "У {name} и так нет запрета."
+WARNS_CLEARED = "Стёр предупреждения у {name} ({count} шт.)."
+WARNS_NOTHING_TO_CLEAR = "У {name} и так нет предупреждений."
+WARNS_CLEARED_FOR_USER = (
+    "✅ Организатор снял с тебя все предупреждения. Чистый лист!"
+)
+CANNOT_CREATE_BANNED = (
+    "🚫 Тебе закрыто создание игр {until}.\n\n"
+    "Но записаться к кому-нибудь можно — загляни в «📋 Список игр»."
+)
+PROFILE_BANNED = "\n🚫 Создание игр закрыто {until}"
 
 # --- поиск человека ---
 ADMIN_NEED_USER = (
@@ -507,7 +544,7 @@ def classes_word(count: int) -> str:
     return "классов"
 
 
-def format_profile(user, stats, last_date=None, warnings=0) -> str:
+def format_profile(user, stats, last_date=None, warnings=0, ban=None) -> str:
     """
     Собирает экран профиля: данные человека плюс его личная статистика.
     user  — строка из таблицы users
@@ -527,6 +564,7 @@ def format_profile(user, stats, last_date=None, warnings=0) -> str:
     last_played = format_last_played(last_date)
     # Предупреждения показываем, только если они есть
     warns = PROFILE_WARNINGS.format(count=warnings) if warnings else ""
+    blocked = PROFILE_BANNED.format(until=format_ban_until(ban)) if ban else ""
 
     met = stats["classes_met"]
     met_text = f"с ребятами из {met} {classes_word(met)}" if met else "пока только один"
@@ -544,9 +582,18 @@ def format_profile(user, stats, last_date=None, warnings=0) -> str:
         f"Последняя игра: {last_played}\n"
         f"Играл {met_text}"
         f"{warns}"
+        f"{blocked}"
     )
 
 
 def sport_emoji(sport: str) -> str:
     """Значок вида спорта. Если его нет в config.py — общий 🏅"""
     return SPORT_EMOJI.get(sport, DEFAULT_SPORT_EMOJI)
+
+
+def format_ban_until(stamp) -> str:
+    """'2026-09-08 23:31:00' -> 'до 8 сентября'."""
+    if not stamp:
+        return ""
+    day = datetime.strptime(stamp[:10], "%Y-%m-%d").date()
+    return f"до {day.day} {MONTHS[day.month - 1]}"

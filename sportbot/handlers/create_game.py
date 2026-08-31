@@ -133,6 +133,14 @@ async def start_creation(message: Message, state: FSMContext) -> None:
         await message.answer(texts.NEED_START)
         return
 
+    # Запрет на создание игр — записываться на чужие он не мешает
+    ban = await db.get_ban(message.chat.id)
+    if ban:
+        await message.answer(
+            texts.CANNOT_CREATE_BANNED.format(until=texts.format_ban_until(ban)),
+            reply_markup=kb.main_menu())
+        return
+
     active = await db.count_active_games(message.chat.id)
     if active >= MAX_ACTIVE_GAMES:
         await message.answer(texts.TOO_MANY_GAMES.format(count=active),

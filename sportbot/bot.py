@@ -64,6 +64,9 @@ async def setup_commands(bot: Bot) -> None:
             BotCommand(command="users", description="Список учеников"),
             BotCommand(command="warn", description="Выдать предупреждение"),
             BotCommand(command="warns", description="История предупреждений"),
+            BotCommand(command="clearwarns", description="Стереть предупреждения"),
+            BotCommand(command="ban", description="Закрыть создание игр"),
+            BotCommand(command="unban", description="Снять запрет"),
         ]
         await bot.set_my_commands(admin_only, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
 

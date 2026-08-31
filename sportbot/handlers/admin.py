@@ -16,7 +16,14 @@ from aiogram.types import BufferedInputFile, Message
 
 import database as db
 import texts
-from config import ADMIN_ID, LONG_TIME_DAYS, now
+from config import (
+    ADMIN_ID,
+    AUTO_BAN_DAYS,
+    LONG_TIME_DAYS,
+    MAX_BAN_DAYS,
+    WARNINGS_BEFORE_BAN,
+    now,
+)
 from scheduler import notify_players, safe_send
 
 logger = logging.getLogger(__name__)
@@ -330,9 +337,15 @@ async def cmd_users(message: Message) -> None:
             current_class = klass
 
         warns = f" ⚠️{user['warnings_count']}" if user["warnings_count"] else ""
+
+        # Показываем запрет, только если он ещё действует
+        ban = user["banned_until"]
+        active_ban = ban and ban > now().strftime("%Y-%m-%d %H:%M:%S")
+        blocked = f" 🚫{texts.format_ban_until(ban)}" if active_ban else ""
+
         lines.append(
             f"  • {user_label(user)} — игр: {user['games_count']}, "
-            f"{texts.format_last_played(user['last_played'])}{warns}"
+            f"{texts.format_last_played(user['last_played'])}{warns}{blocked}"
         )
 
     await message.answer("\n".join(lines))
@@ -369,10 +382,22 @@ async def cmd_warn(message: Message, command: CommandObject) -> None:
 
     logger.info("Организатор выдал предупреждение пользователю %s", user["user_id"])
 
-    await message.answer(texts.WARN_SENT.format(
-        name=html.escape(user["first_name"] or "него"), count=total))
+    name = html.escape(user["first_name"] or "него")
+    await message.answer(texts.WARN_SENT.format(name=name, count=total))
     if not delivered:
         await message.answer(texts.WARN_NOT_DELIVERED)
+
+    # Набралось слишком много — закрываем создание игр автоматически
+    if total >= WARNINGS_BEFORE_BAN and not await db.get_ban(user["user_id"]):
+        stamp = await db.set_ban(user["user_id"], AUTO_BAN_DAYS)
+        until = texts.format_ban_until(stamp)
+
+        await safe_send(message.bot, user["user_id"], texts.BAN_AUTO_FOR_USER.format(
+            until=until, count=total))
+        logger.info("Автоблокировка создания игр для %s: %s предупреждений",
+                    user["user_id"], total)
+        await message.answer(texts.BAN_AUTO_NOTICE.format(
+            name=name, count=total, until=until))
 
 
 @router.message(Command("warns"))
@@ -399,3 +424,89 @@ async def cmd_warns(message: Message, command: CommandObject) -> None:
         lines.append(f"• {when} — {reason}")
 
     await message.answer("\n".join(lines))
+
+
+# ==========================================================
+#   /clearwarns — стереть предупреждения
+# ==========================================================
+
+@router.message(Command("clearwarns"))
+async def cmd_clearwarns(message: Message, command: CommandObject) -> None:
+    if not is_admin(message):
+        await message.answer(texts.NOT_ADMIN)
+        return
+
+    user = await resolve_user(message, (command.args or "").strip(),
+                              "/clearwarns @alinur")
+    if user is None:
+        return
+
+    name = html.escape(user["first_name"] or "него")
+    count = await db.clear_warnings(user["user_id"])
+
+    if not count:
+        await message.answer(texts.WARNS_NOTHING_TO_CLEAR.format(name=name))
+        return
+
+    await safe_send(message.bot, user["user_id"], texts.WARNS_CLEARED_FOR_USER)
+    logger.info("Организатор стёр предупреждения пользователю %s", user["user_id"])
+    await message.answer(texts.WARNS_CLEARED.format(name=name, count=count))
+
+
+# ==========================================================
+#   /ban и /unban — создание игр
+# ==========================================================
+
+@router.message(Command("ban"))
+async def cmd_ban(message: Message, command: CommandObject) -> None:
+    if not is_admin(message):
+        await message.answer(texts.NOT_ADMIN)
+        return
+
+    # Первое слово — ник, второе — дни, остальное — причина
+    parts = (command.args or "").split(maxsplit=2)
+    if len(parts) < 2:
+        await message.answer(texts.ADMIN_NEED_BAN_ARGS)
+        return
+
+    user = await resolve_user(message, parts[0], "/ban @alinur 7 причина")
+    if user is None:
+        return
+
+    if not parts[1].isdigit() or not 1 <= int(parts[1]) <= MAX_BAN_DAYS:
+        await message.answer(texts.ADMIN_BAD_BAN_DAYS.format(limit=MAX_BAN_DAYS))
+        return
+
+    days = int(parts[1])
+    reason = parts[2].strip() if len(parts) > 2 else "без объяснения"
+
+    stamp = await db.set_ban(user["user_id"], days)
+    until = texts.format_ban_until(stamp)
+
+    await safe_send(message.bot, user["user_id"], texts.BAN_FOR_USER.format(
+        until=until, reason=html.escape(reason)))
+
+    logger.info("Организатор закрыл создание игр пользователю %s на %s дней",
+                user["user_id"], days)
+    await message.answer(texts.BAN_SET.format(
+        name=html.escape(user["first_name"] or "Он"), until=until))
+
+
+@router.message(Command("unban"))
+async def cmd_unban(message: Message, command: CommandObject) -> None:
+    if not is_admin(message):
+        await message.answer(texts.NOT_ADMIN)
+        return
+
+    user = await resolve_user(message, (command.args or "").strip(), "/unban @alinur")
+    if user is None:
+        return
+
+    name = html.escape(user["first_name"] or "него")
+    if not await db.clear_ban(user["user_id"]):
+        await message.answer(texts.UNBAN_NOT_BANNED.format(name=name))
+        return
+
+    await safe_send(message.bot, user["user_id"], texts.UNBAN_FOR_USER)
+    logger.info("Организатор снял запрет с пользователя %s", user["user_id"])
+    await message.answer(texts.UNBAN_DONE.format(name=name))

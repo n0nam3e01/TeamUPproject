@@ -55,8 +55,9 @@ async def init_db() -> None:
                 username   TEXT,
                 first_name TEXT,
                 grade      INTEGER,
-                letter     TEXT,
-                created_at TEXT
+                letter       TEXT,
+                banned_until TEXT,
+                created_at   TEXT
             )
         """)
         await db.execute("""
@@ -113,6 +114,9 @@ async def _add_missing_columns(db) -> None:
         },
         "signups": {
             "status": "TEXT NOT NULL DEFAULT 'main'",
+        },
+        "users": {
+            "banned_until": "TEXT",
         },
     }
 
@@ -828,6 +832,7 @@ async def get_users_overview():
                 u.first_name,
                 u.grade,
                 u.letter,
+                u.banned_until,
                 (SELECT COUNT(*) FROM signups s
                  JOIN games g ON g.game_id = s.game_id
                  WHERE s.user_id = u.user_id
@@ -843,3 +848,66 @@ async def get_users_overview():
     for user in users:
         user["last_played"] = await get_last_played(user["user_id"])
     return users
+
+
+# ==========================================================
+#   БЛОКИРОВКА СОЗДАНИЯ ИГР
+# ==========================================================
+
+async def set_ban(user_id: int, days: int) -> str:
+    """
+    Закрывает человеку создание игр на days дней.
+    Возвращает дату, до которой действует запрет.
+    Записываться на чужие игры он по-прежнему может.
+    """
+    until = now() + timedelta(days=days)
+    stamp = until.strftime("%Y-%m-%d %H:%M:%S")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET banned_until = ? WHERE user_id = ?",
+                         (stamp, user_id))
+        await db.commit()
+    return stamp
+
+
+async def clear_ban(user_id: int) -> bool:
+    """Снимает запрет. True — запрет был и снят, False — его и не было."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE users SET banned_until = NULL "
+            "WHERE user_id = ? AND banned_until IS NOT NULL", (user_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def get_ban(user_id: int):
+    """
+    До какого момента человеку закрыто создание игр.
+    Возвращает строку с датой или None, если запрета нет или он уже истёк.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT banned_until FROM users WHERE user_id = ?", (user_id,))
+        row = await cursor.fetchone()
+
+    if row is None or not row["banned_until"]:
+        return None
+
+    # Срок мог уже пройти — тогда запрета фактически нет
+    if row["banned_until"] <= now().strftime("%Y-%m-%d %H:%M:%S"):
+        return None
+    return row["banned_until"]
+
+
+async def clear_warnings(user_id: int) -> int:
+    """
+    Стирает все предупреждения человека. Возвращает, сколько их было.
+    Нужно после разбана: иначе следующее же предупреждение снова
+    перевалит за порог и блокировка включится автоматически.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "DELETE FROM warnings WHERE user_id = ?", (user_id,))
+        await db.commit()
+        return cursor.rowcount
