@@ -20,9 +20,10 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
 
 import database as db
-from config import BOT_NAME, BOT_TOKEN
+from config import ADMIN_ID, BOT_NAME, BOT_TOKEN
 from handlers import routers
 from scheduler import setup_scheduler
 
@@ -38,6 +39,26 @@ def setup_logging() -> None:
     )
     # Планировщик слишком болтливый — оставляем от него только важное
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
+
+
+async def setup_commands(bot: Bot) -> None:
+    """
+    Заполняет меню команд — то, что появляется по кнопке «/» в Telegram.
+    Обычные ученики видят две команды, ты как организатор — четыре.
+    """
+    common = [
+        BotCommand(command="start", description="Начать заново и открыть меню"),
+        BotCommand(command="help", description="Как пользоваться ботом"),
+    ]
+    await bot.set_my_commands(common, scope=BotCommandScopeDefault())
+
+    # Команды организатора видны только в твоём личном чате с ботом
+    if ADMIN_ID:
+        admin_only = common + [
+            BotCommand(command="stats", description="Статистика проекта"),
+            BotCommand(command="export", description="Выгрузить данные в CSV"),
+        ]
+        await bot.set_my_commands(admin_only, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
 
 
 async def main() -> None:
@@ -74,6 +95,9 @@ async def main() -> None:
         logger.error("Нет связи с Telegram. Проверь интернет и попробуй снова.")
         await bot.session.close()
         return
+
+    await setup_commands(bot)
+    logger.info("Меню команд в Telegram обновлено")
 
     dispatcher = Dispatcher(storage=MemoryStorage())
 
